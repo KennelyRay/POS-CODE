@@ -1,283 +1,166 @@
-# Ken-dal Store POS System
+# Ken-dal Store POS
 
-A modern Point of Sale (POS) system built with React, TypeScript, and Electron featuring **Python-powered thermal printing** for professional receipt printing.
+Desktop point-of-sale software built with React, TypeScript, Electron, and Python printer helpers. It is designed for day-to-day store operations such as checkout, product management, receipt printing, customer credit tracking, and sales reporting.
 
-## 🚀 Features
+## Overview
 
-- **Modern POS Interface**: Clean, intuitive design for efficient sales processing
-- **🔥 Python Thermal Printing**: Advanced ESC/POS thermal printing with enhanced darkness control
-- **Product Management**: Add, edit, and organize products by categories
-- **Sales Tracking**: Comprehensive sales reports and analytics  
-- **Customer Credit System**: Track customer credit and purchases
-- **Receipt Management**: Digital receipt storage and thermal printing
-- **Staff Management**: User authentication and staff access control
-- **Cross-Platform**: Works on Windows, macOS, and Linux
-- **Data Management**: Export and import capabilities for business data
-- **💰 Auto Cash Drawer**: Automatically opens cash drawer upon purchase confirmation via thermal printer
+- Electron desktop app with a React frontend
+- Product and category management with import/export tools
+- Basket workflow with barcode scanning support
+- Printable receipts and printable full product price lists
+- Customer credit tracking and payment history
+- Gross sales, receipts, and sales record reporting
+- Python-based thermal printer integration for ESC/POS-compatible printers
 
-## 🖨️ Python Thermal Printing System
+## Tech Stack
 
-This POS system features an advanced **Python-based thermal printing engine** that provides:
+- React 18
+- TypeScript
+- Material UI
+- Electron
+- Electron Builder
+- Python printer helper scripts
 
-### ✨ Advanced Features
-- **Maximum Print Darkness**: Enhanced ESC/POS commands for darker, clearer prints
-- **Anti-Fade Technology**: Specialized thermal head control to eliminate faded receipts
-- **Direct Printer Communication**: Bypasses Windows drivers for better control
-- **Multiple Printer Support**: Auto-detection of USB, Serial, and Network thermal printers
-- **Enhanced Heat Settings**: Optimized thermal head activation for consistent quality
-- **QR Code Receipts**: Optional QR codes for digital receipt verification
+## Repository Structure
 
-### 🔧 Supported Thermal Printers
-- **Epson TM Series** (TM-T88, TM-T20, etc.)
-- **XP-58** and compatible 58mm thermal printers
-- **Star Micronics** thermal printers
-- **Generic ESC/POS** compatible thermal printers
-
-## 📦 Installation
-
-### Prerequisites
-1. **Node.js 16+** - Download from [nodejs.org](https://nodejs.org/)
-2. **Python 3.8+** - Download from [python.org](https://python.org/)
-
-### Setup Instructions
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd pos-system
-   ```
-
-2. **Install Node.js dependencies**
-   ```bash
-   npm install
-   ```
-
-3. **Set up Python thermal printing** (Windows)
-   ```bash
-   setup_python.bat
-   ```
-   
-   Or manually install Python dependencies:
-   ```bash
-   pip install python-escpos==3.0a9 pyusb==1.2.1 Pillow==10.0.1 qrcode==7.4.2
-   ```
-
-4. **Test thermal printer connection**
-   ```bash
-   python thermal_printer.py list
-   python thermal_printer.py test
-   ```
-
-5. **Start the application**
-   ```bash
-   npm start
-   ```
-
-## 🖨️ Thermal Printer Configuration
-
-### Automatic Detection
-The system automatically detects connected thermal printers including:
-- USB thermal printers (plug-and-play)
-- Network thermal printers (configure IP in settings)
-- Serial thermal printers (configure COM port)
-
-### Manual Configuration
-If your printer isn't automatically detected:
-
-1. **Check USB Connection**
-   ```bash
-   python thermal_printer.py list
-   ```
-
-2. **Test Print**
-   ```bash
-   python thermal_printer.py test
-   ```
-
-3. **Print Custom Receipt**
-   ```bash
-   python thermal_printer.py print --data '{"storeName":"Test Store","total":100}'
-   ```
-
-### Troubleshooting Faded Prints
-
-The Python thermal printing system includes **anti-fade technology**:
-
-- **Maximum Heat Settings**: Enhanced thermal head activation
-- **Print Density Control**: Optimized for darker output
-- **Double-Strike Mode**: Prints each line twice for boldness
-- **Emphasized Printing**: ESC/POS bold commands
-
-If prints are still faded:
-1. Check thermal paper quality (use high-quality thermal paper)
-2. Clean thermal print head with isopropyl alcohol
-3. Ensure proper cable connections
-4. Update thermal printer drivers
-
-## 🖥️ Usage
-
-### Getting Started
-1. **Login**: Use default credentials (admin/admin) or create new staff accounts
-2. **Setup Store**: Configure store information in Settings
-3. **Configure Printer**: Select thermal printer in Settings > Thermal Printer
-4. **Add Products**: Create product categories and add inventory
-5. **Process Sales**: Use the intuitive basket interface for transactions
-6. **Print Receipts**: Automatic thermal printing after checkout
-
-### Key Components
-
-#### 📊 Dashboard
-- Real-time sales overview
-- Quick access to all features
-- Modern, responsive design
-
-#### 🛍️ Point of Sale
-- Product search and barcode scanning
-- Category-based product browsing
-- Shopping basket with quantity/price adjustments
-- Customer payment processing
-- **Automatic thermal receipt printing**
-
-#### 📦 Product Management
-- Category creation and management
-- Product information (name, price, stock, barcodes)
-- Bulk import/export capabilities
-- Inventory tracking
-
-#### 📈 Sales & Reports
-- Daily, weekly, monthly sales reports
-- Transaction history
-- Customer credit tracking
-- Export capabilities for accounting
-
-#### ⚙️ Settings
-- Store information configuration
-- **Thermal printer selection and testing**
-- Theme customization
-- Data backup and restore
-- User management
-
-## 🏗️ Project Structure
-
-```
+```text
 src/
-├── components/          # Reusable UI components
-├── pages/              # Main application pages
-├── contexts/           # React context providers
-├── types/              # TypeScript type definitions
-└── App.tsx             # Main application component
+  components/    Shared UI shell and routing helpers
+  contexts/      App-level providers such as printer context
+  pages/         POS modules like Basket, Products, Reports, Settings
+  types/         TypeScript declarations
+  App.tsx        Main app setup and shared contexts
 
 public/
-├── electron.js         # Electron main process
-├── preload.js         # Electron preload script
-└── index.html         # HTML template
+  electron.js    Electron main process
+  preload.js     Electron preload bridge
+  index.html     App HTML template
 
-thermal_printer.py      # Python thermal printing engine
-requirements.txt        # Python dependencies
-setup_python.bat       # Python setup script
+assets/
+  icon.png       Application icon used for packaged builds
+
+*.py
+  Printer utilities and direct printer integration scripts
 ```
 
-## 🛠️ Development
+## Main Features
 
-### Available Scripts
+### Store Operations
 
-- `npm start` - Start development server
-- `npm run build` - Build for production
-- `npm run electron` - Start Electron app
-- `npm run electron-dev` - Start Electron in development mode
-- `npm run dist` - Build and package for distribution
+- Fast basket workflow for cashier use
+- Product search and barcode-based item lookup
+- Receipt generation and reprinting
+- Customer credit management with payment tracking
 
-### Python Thermal Printing API
+### Inventory and Pricing
 
-The `thermal_printer.py` script provides:
+- Category and product management
+- CSV/JSON import and export helpers
+- Printable product price list for offline/power-loss reference
+
+### Reporting
+
+- Sales records and receipt history
+- Gross sales reporting
+- Export-ready data views for store operations
+
+### Printing
+
+- Thermal receipt printing via Python helper scripts
+- Cash drawer support
+- Print preview and browser-style printing for the full product price list
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 16 or newer
+- npm
+- Python 3.8 or newer
+- Windows is the primary packaging target for the current Electron release setup
+
+### Install Dependencies
 
 ```bash
-# List available printers
-python thermal_printer.py list
-
-# Print receipt
-python thermal_printer.py print --data '{"id":"123","total":100,"items":[...]}'
-
-# Test print
-python thermal_printer.py test
-
-# Open cash drawer
-python thermal_printer.py drawer
+npm install
 ```
 
-### Built With
+### Optional Python Printer Setup
 
-- **React 18** - UI library
-- **TypeScript** - Type safety
-- **Material-UI** - Component library
-- **Electron** - Desktop app framework
-- **Python** - Thermal printing engine
-- **ESC/POS** - Thermal printer commands
+If you want to use the thermal printer tools locally:
 
-## 📱 Platform Support
+```bash
+setup_python.bat
+```
 
-- ✅ Windows 10/11
-- ✅ macOS 10.14+
-- ✅ Linux (Ubuntu, Debian, etc.)
+Or install the Python packages manually:
 
-## 🔧 Configuration
+```bash
+pip install python-escpos==3.0a9 pyusb==1.2.1 Pillow==10.0.1 qrcode==7.4.2
+```
 
-### Store Settings
-Configure your store information in the Settings page:
-- Store name and address
-- Contact information
-- Theme preferences
-- **Default thermal printer selection**
+### Run in Development
 
-### Thermal Printer Settings
-The Python thermal printing system automatically optimizes for:
-- **Print Density**: Maximum darkness settings
-- **Heat Control**: Enhanced thermal head activation
-- **Font Selection**: Optimized for thermal printers
-- **Paper Size**: 58mm thermal paper (configurable)
+```bash
+npm start
+```
 
-### Data Management
-- **Export**: Save sales data and products to CSV/JSON
-- **Import**: Restore data from backup files
-- **Clear**: Reset application data (with confirmation)
+This starts the React development server. The Electron main process lives in `public/electron.js`.
 
-## 🤝 Contributing
+## Build Commands
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Test thermal printing functionality
-4. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-5. Push to the branch (`git push origin feature/AmazingFeature`)
-6. Open a Pull Request
+### Web Production Build
 
-## 📝 License
+```bash
+npm run build
+```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Creates the web production output in `build/`.
 
-## 🆘 Support
+### Electron Desktop Build
 
-For thermal printing issues:
-1. Run `python thermal_printer.py test` to verify printer connection
-2. Check that Python dependencies are installed correctly
-3. Ensure thermal printer is compatible with ESC/POS commands
-4. Contact support with printer model and error messages
+```bash
+npm run build:electron
+```
 
-For general support:
-- Create an issue in the repository
-- Check the documentation
-- Review existing issues for solutions
+This runs the React production build first, then packages the desktop app using `electron-builder`.
 
-## 🎯 Roadmap
+Current packaged output:
 
-- [ ] Network thermal printer support
-- [ ] Receipt templates customization
-- [ ] Cloud synchronization
-- [ ] Advanced reporting
-- [ ] Multi-store support
-- [ ] Mobile companion app
-- [ ] Inventory alerts
-- [ ] Customer loyalty program
+- `dist-electron-<version>-installer/`
+- Windows NSIS installer artifacts such as `.exe` and `.blockmap`
 
----
+## Thermal Printing Notes
 
-**Powered by Python Thermal Printing Technology** 🐍🖨️ 
+- The app includes Python scripts for printer discovery, receipt printing, and cash drawer actions.
+- Packaged builds include the required Python helper scripts as extra resources.
+- For detailed printer setup and troubleshooting, see [THERMAL_PRINTING_GUIDE.md](THERMAL_PRINTING_GUIDE.md).
+
+## GitHub Releases
+
+This repository includes a GitHub Actions workflow for Electron releases.
+
+### How releases work
+
+- Push a tag in the format `v*.*.*`, for example `v1.21.0`
+- GitHub Actions builds the Windows Electron installer
+- The workflow attaches the generated installer artifacts to a GitHub Release
+
+### Example release commands
+
+```bash
+git tag v1.21.0
+git push origin v1.21.0
+```
+
+You can also run the workflow manually from the GitHub Actions tab to build release artifacts without tagging.
+
+## Contributing
+
+1. Create a feature branch
+2. Make and test your changes
+3. Open a pull request with a clear summary
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
