@@ -1,0 +1,12 @@
+{
+  "framework": "create-react-app",
+  "installCommand": "npm install --ignore-scripts",
+  "buildCommand": "CI=false NODE_OPTIONS=--openssl-legacy-provider npx react-scripts build",
+  "outputDirectory": "build",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

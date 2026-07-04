@@ -5,6 +5,9 @@
   "description": "Point of Sale System for KKK-A",
   "author": "KKK-A",
   "license": "MIT",
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
