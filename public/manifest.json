@@ -1,0 +1,20 @@
+{
+  "short_name": "Ken-dal POS",
+  "name": "Ken-dal Store Point of Sale System",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "store-icon.svg",
+      "sizes": "256x256",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#667eea",
+  "background_color": "#ffffff"
+} 

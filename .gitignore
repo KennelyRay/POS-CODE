@@ -1,0 +1,43 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# production
+/build
+/dist
+/dist-electron
+/dist-electron-*/
+
+# misc
+.DS_Store
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.db
+*.sqlite
+*.sqlite3
+customer_credits*.csv
+test_receipt*.json
+*.blockmap
+builder-debug.yml
+builder-effective-config.yaml
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo 
