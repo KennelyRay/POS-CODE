@@ -98,6 +98,32 @@ class XP58DirectUSB:
         """Turn off bold text"""
         return self.send_data(b'\x1B\x45\x00')  # ESC E 0 - Bold off
     
+    def print_qr_code(self, data: str) -> bool:
+        """Print a native ESC/POS QR code"""
+        try:
+            qr_bytes = data.encode('utf-8')
+
+            commands = [
+                b'\x1D\x28\x6B\x04\x00\x31\x41\x32\x00',  # Model 2
+                b'\x1D\x28\x6B\x03\x00\x31\x43\x06',      # Module size
+                b'\x1D\x28\x6B\x03\x00\x31\x45\x31',      # Error correction: M
+            ]
+
+            store_len = len(qr_bytes) + 3
+            pL = store_len % 256
+            pH = store_len // 256
+            commands.append(bytes([0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30]) + qr_bytes)
+            commands.append(b'\x1D\x28\x6B\x03\x00\x31\x51\x30')  # Print QR
+
+            for command in commands:
+                if not self.send_data(command):
+                    return False
+
+            return True
+        except Exception as e:
+            print(f"QR print error: {e}", file=sys.stderr)
+            return False
+
     def line_feed(self, lines: int = 1) -> bool:
         """Send line feeds"""
         return self.send_data(b'\n' * lines)
@@ -117,6 +143,7 @@ class XP58DirectUSB:
             total = float(receipt_data.get('total', 0))
             customer_money = float(receipt_data.get('customerMoney', total))
             change = float(receipt_data.get('change', 0))
+            qr_data = str(receipt_data.get('qrData', f'DISPLAY-{receipt_id}'))
             
             # Format date
             try:
@@ -146,7 +173,7 @@ class XP58DirectUSB:
             self.send_text("ITEMS:\n")
             self.send_text("." * 32 + "\n")
             
-            for item in items:
+            for index, item in enumerate(items):
                 name = str(item.get('name', 'Unknown Item'))
                 quantity = int(item.get('quantity', 1))
                 price = float(item.get('price', 0))
@@ -157,8 +184,10 @@ class XP58DirectUSB:
                     name = name[:17] + "..."
                 
                 self.send_text(f"{name}\n")
-                self.send_text(f"  {quantity} x P{price:.2f} = P{line_total:.2f}\n")
-                self.line_feed()
+                self.send_text(f"  Qty: {quantity} @ P{price:.2f}\n")
+                self.send_text(f"  Item Total: P{line_total:.2f}\n")
+                if index < len(items) - 1:
+                    self.line_feed()
             
             # Summary
             self.send_text("." * 32 + "\n")
@@ -172,6 +201,9 @@ class XP58DirectUSB:
             # Footer
             self.set_align_center()
             self.send_text("-" * 32 + "\n")
+            self.send_text("Display QR Code\n")
+            self.print_qr_code(qr_data)
+            self.line_feed()
             self.send_text("Thank you!\n")
             self.send_text("Please come again\n")
             self.line_feed(3)
@@ -198,7 +230,8 @@ class XP58DirectUSB:
             ],
             'total': 56.00,
             'customerMoney': 60.00,
-            'change': 4.00
+            'change': 4.00,
+            'qrData': f'DISPLAY-TEST-{datetime.now().strftime("%H%M%S")}'
         }
         
         print("Printing test receipt via direct USB...", file=sys.stderr)

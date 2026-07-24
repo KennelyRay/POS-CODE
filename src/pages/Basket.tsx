@@ -81,6 +81,20 @@ interface BasketItem extends Product {
   quantity: number;
 }
 
+const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
+  if (!(element instanceof HTMLElement)) return false;
+  return (
+    element.tagName === 'INPUT' ||
+    element.tagName === 'TEXTAREA' ||
+    element.isContentEditable
+  );
+};
+
+const createReceiptQrData = (receiptId: string) => {
+  const randomSegment = Math.random().toString(36).slice(2, 10).toUpperCase();
+  return `DISPLAY-${receiptId}-${randomSegment}`;
+};
+
 type BasketItemsListProps = {
   basket: BasketItem[];
   expandedItem: string | null;
@@ -694,6 +708,7 @@ const Basket: React.FC = () => {
   const barcodeResetTimerRef = useRef<number | null>(null);
   const barcodeLikelyScannerRef = useRef(false);
   const barcodeStartSnapshotRef = useRef<{ searchQuery: string; customerMoney: string } | null>(null);
+  const barcodeStartedInEditableRef = useRef(false);
 
   useEffect(() => {
     const reset = () => {
@@ -702,6 +717,7 @@ const Basket: React.FC = () => {
       barcodeLastKeyTimeRef.current = null;
       barcodeLikelyScannerRef.current = false;
       barcodeStartSnapshotRef.current = null;
+      barcodeStartedInEditableRef.current = false;
       if (barcodeResetTimerRef.current != null) {
         window.clearTimeout(barcodeResetTimerRef.current);
         barcodeResetTimerRef.current = null;
@@ -725,7 +741,12 @@ const Basket: React.FC = () => {
         const startedAt = barcodeStartTimeRef.current;
         const durationMs = startedAt == null ? Infinity : now - startedAt;
 
-        if (barcodeLikelyScannerRef.current && buffered.trim().length >= 3 && durationMs <= 1500) {
+        if (
+          barcodeLikelyScannerRef.current &&
+          !barcodeStartedInEditableRef.current &&
+          buffered.trim().length >= 3 &&
+          durationMs <= 1500
+        ) {
           e.preventDefault();
           e.stopPropagation();
           handleBarcodeScan(buffered);
@@ -739,6 +760,7 @@ const Basket: React.FC = () => {
       if (lastKeyTime == null || now - lastKeyTime > 150) {
         barcodeBufferRef.current = e.key;
         barcodeStartTimeRef.current = now;
+        barcodeStartedInEditableRef.current = isEditableElement(document.activeElement);
         barcodeStartSnapshotRef.current = {
           searchQuery: searchQueryRef.current,
           customerMoney: customerMoneyRef.current,
@@ -748,22 +770,21 @@ const Basket: React.FC = () => {
         if (now - lastKeyTime <= 80) {
           const wasLikelyScanner = barcodeLikelyScannerRef.current;
           barcodeLikelyScannerRef.current = true;
-          if (!wasLikelyScanner) {
+          if (!wasLikelyScanner && !barcodeStartedInEditableRef.current) {
             const snapshot = barcodeStartSnapshotRef.current;
             if (snapshot) {
               if (searchQueryRef.current !== snapshot.searchQuery) setSearchQuery(snapshot.searchQuery);
               if (customerMoneyRef.current !== snapshot.customerMoney) setCustomerMoney(snapshot.customerMoney);
             }
             const active = document.activeElement as HTMLElement | null;
-            if (
-              active &&
-              (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)
-            ) {
+            if (isEditableElement(active)) {
               active.blur();
             }
           }
-          e.preventDefault();
-          e.stopPropagation();
+          if (!barcodeStartedInEditableRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
         }
       }
 
@@ -851,13 +872,15 @@ const Basket: React.FC = () => {
       total: paymentDetails.total,
       type: 'general' as 'general',
     };
+    const qrData = createReceiptQrData(sale.id);
     salesContext.addSale(sale);
     
     // Create receipt with customer money and change information
     const receipt = {
       ...sale,
       customerMoney: paymentDetails.customerMoney,
-      change: paymentDetails.change
+      change: paymentDetails.change,
+      qrData,
     };
     salesContext.addReceipt(receipt);
 
@@ -901,6 +924,7 @@ const Basket: React.FC = () => {
       change: paymentDetails.change,
       storeName: storeSettings.storeName,
       storeAddress: storeSettings.storeAddress,
+      qrData,
     };
 
     // Store receipt data and show print confirmation dialog

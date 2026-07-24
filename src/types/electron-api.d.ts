@@ -24,6 +24,7 @@ interface ReceiptData {
   change?: number;
   storeName?: string;
   storeAddress?: string;
+  qrData?: string;
 }
 
 declare global {

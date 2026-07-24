@@ -35,6 +35,7 @@ export interface ReceiptRecord {
   type: 'general' | 'store' | 'load';
   customerMoney?: number;
   change?: number;
+  qrData?: string;
 }
 export const SalesContext = createContext<{
   sales: SaleRecord[];

@@ -59,7 +59,75 @@ interface Receipt {
   type: 'general' | 'store' | 'load';
   customerMoney?: number;
   change?: number;
+  qrData?: string;
 }
+
+const buildDisplayQrMatrix = (value: string, size = 21) => {
+  const normalized = value || 'DISPLAY-QR';
+  let seed = 0;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    seed = (seed * 31 + normalized.charCodeAt(i)) >>> 0;
+  }
+
+  const matrix: boolean[][] = [];
+  for (let row = 0; row < size; row += 1) {
+    const currentRow: boolean[] = [];
+    for (let col = 0; col < size; col += 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      const inFinderTopLeft = row < 7 && col < 7;
+      const inFinderTopRight = row < 7 && col >= size - 7;
+      const inFinderBottomLeft = row >= size - 7 && col < 7;
+
+      if (inFinderTopLeft || inFinderTopRight || inFinderBottomLeft) {
+        const finderRow = row < 7 ? row : row - (size - 7);
+        const finderCol = col < 7 ? col : col - (size - 7);
+        const isOuter = finderRow === 0 || finderRow === 6 || finderCol === 0 || finderCol === 6;
+        const isInner = finderRow >= 2 && finderRow <= 4 && finderCol >= 2 && finderCol <= 4;
+        currentRow.push(isOuter || isInner);
+      } else {
+        currentRow.push((seed & 1) === 1);
+      }
+    }
+    matrix.push(currentRow);
+  }
+
+  return matrix;
+};
+
+const ReceiptQrPreview: React.FC<{ value: string }> = ({ value }) => {
+  const matrix = buildDisplayQrMatrix(value);
+
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${matrix[0].length}, 1fr)`,
+        gap: 0.25,
+        p: 1,
+        width: 200,
+        height: 200,
+        bgcolor: 'common.white',
+        borderRadius: 2,
+        border: '1px solid',
+        borderColor: 'grey.300',
+        mx: 'auto',
+      }}
+    >
+      {matrix.flatMap((row, rowIndex) =>
+        row.map((isDark, colIndex) => (
+          <Box
+            key={`${rowIndex}-${colIndex}`}
+            sx={{
+              bgcolor: isDark ? 'common.black' : 'common.white',
+              borderRadius: 0.2,
+            }}
+          />
+        ))
+      )}
+    </Box>
+  );
+};
 
 const Receipts: React.FC = () => {
   const { receipts, deleteReceipt } = useContext(SalesContext);
@@ -81,6 +149,9 @@ const Receipts: React.FC = () => {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [bulkDeleteMonthData, setBulkDeleteMonthData] = useState<{ month: string; count: number } | null>(null);
   const [viewMode, setViewMode] = useState<'month' | 'day'>('month');
+
+  const getReceiptQrData = (receipt: Receipt) =>
+    receipt.qrData || `DISPLAY-${receipt.id}`;
 
   // Filter receipts based on search and type
   const filteredReceipts = receipts.filter(receipt => {
@@ -221,6 +292,7 @@ const Receipts: React.FC = () => {
         ...selectedReceipt,
         storeName: storeSettings?.storeName || 'Ken-dal Store',
         storeAddress: storeSettings?.storeAddress || '123 Main Street, City',
+        qrData: getReceiptQrData(selectedReceipt),
       };
       
       const success = await printReceipt(receiptData);
@@ -258,6 +330,7 @@ const Receipts: React.FC = () => {
         ...receipt,
         storeName: storeSettings?.storeName || 'Ken-dal Store',
         storeAddress: storeSettings?.storeAddress || '123 Main Street, City',
+        qrData: getReceiptQrData(receipt),
       };
       
       const success = await printReceipt(receiptData);
@@ -885,6 +958,26 @@ const Receipts: React.FC = () => {
                       </Typography>
                     </Box>
                   </Stack>
+                </Card>
+
+                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, mt: 3 }}>
+                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>
+                    QR Preview
+                  </Typography>
+                  <ReceiptQrPreview value={getReceiptQrData(selectedReceipt)} />
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{
+                      display: 'block',
+                      mt: 2,
+                      textAlign: 'center',
+                      fontFamily: 'monospace',
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    {getReceiptQrData(selectedReceipt)}
+                  </Typography>
                 </Card>
               </Grid>
 
