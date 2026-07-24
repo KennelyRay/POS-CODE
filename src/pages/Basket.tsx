@@ -39,7 +39,6 @@ import {
   ExpandLess as ExpandLessIcon,
   Category as CategoryIcon,
   Search as SearchIcon,
-  LocalOffer as LocalOfferIcon,
   Print as PrintIcon,
   // Category-specific icons
   LocalBar as LiquorIcon,
@@ -553,6 +552,10 @@ const Basket: React.FC = () => {
   }, [products]);
 
   const total = useMemo(() => basket.reduce((sum, item) => sum + item.price * item.quantity, 0), [basket]);
+  const parsedCustomerMoney = customerMoney.trim() === '' ? Number.NaN : Number(customerMoney);
+  const hasValidCustomerMoney = Number.isFinite(parsedCustomerMoney) && parsedCustomerMoney >= 0;
+  const isCustomerMoneyEnough = hasValidCustomerMoney && parsedCustomerMoney >= total;
+  const currentChange = isCustomerMoneyEnough ? parsedCustomerMoney - total : 0;
 
   const productsByCategory = useMemo(() => {
     if (selectedCategory !== 'All' || normalizedSearchQuery) return [];
@@ -844,32 +847,32 @@ const Basket: React.FC = () => {
 
   const handleCheckout = () => {
     if (basket.length === 0) return;
-    if (!customerMoney || isNaN(Number(customerMoney))) {
-      setSnackbar({ open: true, message: 'Please enter customer money.', severity: 'warning' });
-      return;
-    }
-    const total = basket.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const money = Number(customerMoney);
-    if (money < total) {
-      setSnackbar({ open: true, message: 'Customer money is not enough.', severity: 'warning' });
-      return;
-    }
-    setPaymentDetails({
-      total,
-      customerMoney: money,
-      change: money - total
-    });
+    setPaymentDetails(null);
     setShowPaymentSummary(true);
   };
 
   const handleConfirmPayment = async () => {
-    if (!paymentDetails) return;
+    if (!hasValidCustomerMoney) {
+      setSnackbar({ open: true, message: 'Please enter customer money.', severity: 'warning' });
+      return;
+    }
+    if (!isCustomerMoneyEnough) {
+      setSnackbar({ open: true, message: 'Customer money must be exact or more.', severity: 'warning' });
+      return;
+    }
+
+    const currentPaymentDetails = {
+      total,
+      customerMoney: parsedCustomerMoney,
+      change: currentChange,
+    };
+    setPaymentDetails(currentPaymentDetails);
     
     const sale = {
       id: Date.now().toString(),
       date: new Date(),
       items: basket.map(({ name, quantity, price }) => ({ name, quantity, price })),
-      total: paymentDetails.total,
+      total: currentPaymentDetails.total,
       type: 'general' as 'general',
     };
     const qrData = createReceiptQrData(sale.id);
@@ -878,14 +881,14 @@ const Basket: React.FC = () => {
     // Create receipt with customer money and change information
     const receipt = {
       ...sale,
-      customerMoney: paymentDetails.customerMoney,
-      change: paymentDetails.change,
+      customerMoney: currentPaymentDetails.customerMoney,
+      change: currentPaymentDetails.change,
       qrData,
     };
     salesContext.addReceipt(receipt);
 
     // Record gross sales
-    recordGrossSales(paymentDetails.total);
+    recordGrossSales(currentPaymentDetails.total);
 
     // Automatically open cash drawer
     try {
@@ -919,9 +922,9 @@ const Basket: React.FC = () => {
       id: sale.id,
       date: sale.date.toISOString(),
       items: sale.items,
-      total: paymentDetails.total,
-      customerMoney: paymentDetails.customerMoney,
-      change: paymentDetails.change,
+      total: currentPaymentDetails.total,
+      customerMoney: currentPaymentDetails.customerMoney,
+      change: currentPaymentDetails.change,
       storeName: storeSettings.storeName,
       storeAddress: storeSettings.storeAddress,
       qrData,
@@ -1025,7 +1028,7 @@ const Basket: React.FC = () => {
               disabled={basket.length === 0}
               sx={{ borderRadius: 3, px: 3, fontWeight: 700 }}
             >
-              Checkout
+              Process Payment
             </Button>
             <Button
               variant="outlined"
@@ -1461,25 +1464,6 @@ const Basket: React.FC = () => {
             {/* Checkout Section */}
             {basket.length > 0 && (
               <Box sx={{ p: 3, borderTop: '1px solid', borderColor: 'divider' }}>
-                <TextField
-                  fullWidth
-                  label="Customer Payment"
-                  value={customerMoney}
-                  onChange={e => setCustomerMoney(e.target.value.replace(/[^\d.]/g, ''))}
-                  type="number"
-                  placeholder="0.00"
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <LocalOfferIcon color="action" />
-                      </InputAdornment>
-                    ),
-                  }}
-                  sx={{ 
-                    mb: 2,
-                    '& .MuiOutlinedInput-root': { borderRadius: 3 }
-                  }}
-                />
                 <Stack spacing={2}>
                   <Button
                     fullWidth
@@ -1489,6 +1473,9 @@ const Basket: React.FC = () => {
                       setBasket([]);
                       setCustomerMoney('');
                       setExpandedItem(null);
+                      setPaymentDetails(null);
+                      setShowPaymentSummary(false);
+                      setShowPrintDialog(false);
                       setSnackbar({ open: true, message: 'Basket cleared', severity: 'info' });
                     }}
                     sx={{ borderRadius: 3, py: 1.5 }}
@@ -1556,7 +1543,7 @@ const Basket: React.FC = () => {
         }}>
           <ReceiptIcon sx={{ fontSize: 36, ml: 3, my: 2 }} />
           <Typography variant="h5" fontWeight={800} sx={{ py: 2 }}>
-            Payment Summary
+            Process Payment
           </Typography>
         </Box>
         <DialogContent sx={{ p: 0 }}>
@@ -1588,6 +1575,44 @@ const Basket: React.FC = () => {
               ))}
             </List>
             <Divider sx={{ my: 2 }} />
+            <TextField
+              fullWidth
+              autoFocus
+              label="Customer Money"
+              value={customerMoney}
+              onChange={(e) => setCustomerMoney(e.target.value.replace(/[^\d.]/g, ''))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && isCustomerMoneyEnough) {
+                  void handleConfirmPayment();
+                }
+              }}
+              type="number"
+              placeholder="0.00"
+              error={customerMoney.trim() !== '' && !isCustomerMoneyEnough}
+              helperText={
+                customerMoney.trim() === ''
+                  ? 'Enter the amount received from the customer.'
+                  : isCustomerMoneyEnough
+                    ? 'Amount is enough to continue.'
+                    : `Need at least ₱${total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`
+              }
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    ₱
+                  </InputAdornment>
+                ),
+              }}
+              sx={{
+                mb: 2,
+                '& .MuiOutlinedInput-root': { borderRadius: 3 }
+              }}
+            />
+            <Alert severity={isCustomerMoneyEnough ? 'success' : 'info'} sx={{ mb: 2, borderRadius: 3 }}>
+              {isCustomerMoneyEnough
+                ? 'Customer money is enough. You can now confirm the payment.'
+                : 'Customer money must be exact or more before you can proceed.'}
+            </Alert>
             {/* Summary Section */}
             <Box sx={{
               display: 'flex',
@@ -1601,15 +1626,23 @@ const Basket: React.FC = () => {
             }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Typography variant="subtitle2">Total Amount</Typography>
-                <Chip label={`₱${paymentDetails?.total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="secondary" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
+                <Chip label={`₱${total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="secondary" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Typography variant="subtitle2">Customer Money</Typography>
-                <Chip label={`₱${paymentDetails?.customerMoney.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="info" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
+                <Chip
+                  label={
+                    hasValidCustomerMoney
+                      ? `₱${parsedCustomerMoney.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+                      : 'Not entered'
+                  }
+                  color="info"
+                  sx={{ fontWeight: 700, fontSize: 16, px: 2 }}
+                />
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Typography variant="subtitle2">Change</Typography>
-                <Chip label={`₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="success" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
+                <Chip label={`₱${currentChange.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="success" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
               </Box>
             </Box>
           </Box>
@@ -1626,6 +1659,7 @@ const Basket: React.FC = () => {
           <Button 
             variant="contained" 
             onClick={handleConfirmPayment}
+            disabled={!isCustomerMoneyEnough}
             sx={{ borderRadius: 3, fontWeight: 700, px: 4, py: 1.5, boxShadow: 2 }}
             color="primary"
           >
