@@ -1,7 +1,6 @@
 import React, { createContext, useMemo, useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider, CssBaseline } from '@mui/material';
-import { createTheme } from '@mui/material/styles';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Basket from './pages/Basket';
@@ -14,6 +13,8 @@ import Staff from './pages/Staff';
 import GrossSales from './pages/GrossSales';
 import ProtectedRoute from './components/ProtectedRoute';
 import { PrinterProvider } from './contexts/PrinterContext';
+import { BasketProvider } from './contexts/BasketContext';
+import { buildTheme, isThemeName, ThemeName } from './theme';
 
 // 1. Theme context for global theme selection
 export const ThemeContext = createContext<{ setThemeName: (theme: ThemeName) => void; themeName: ThemeName }>({ setThemeName: () => {}, themeName: 'light' });
@@ -151,115 +152,10 @@ export const ProductsContext = createContext<ProductsContextType>({
   importProducts: async () => {},
 });
 
-type ThemeName = 'light' | 'dark' | 'blue' | 'green' | 'pink' | 'purple' | 'orange' | 'teal' | 'red' | 'gray';
-
-const themeOptions: Record<ThemeName, any> = {
-  light: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#1976d2' },
-      secondary: { main: '#009688' },
-      background: { default: '#f4f6f8', paper: '#fff' },
-      text: { primary: '#222', secondary: '#555' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  dark: {
-    palette: {
-      mode: 'dark',
-      primary: { main: '#90caf9' },
-      secondary: { main: '#80cbc4' },
-      background: { default: '#121212', paper: '#1e1e1e' },
-      text: { primary: '#fff', secondary: '#b0b0b0' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  blue: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#1565c0' },
-      secondary: { main: '#00bcd4' },
-      background: { default: '#e3f2fd', paper: '#ffffff' },
-      text: { primary: '#0d1a26', secondary: '#1976d2' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  green: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#388e3c' },
-      secondary: { main: '#8bc34a' },
-      background: { default: '#e8f5e9', paper: '#ffffff' },
-      text: { primary: '#1b5e20', secondary: '#388e3c' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  pink: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#d81b60' },
-      secondary: { main: '#f06292' },
-      background: { default: '#fce4ec', paper: '#ffffff' },
-      text: { primary: '#880e4f', secondary: '#d81b60' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  purple: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#7c4dff' },
-      secondary: { main: '#b388ff' },
-      background: { default: '#f3e5f5', paper: '#fff' },
-      text: { primary: '#4a148c', secondary: '#7c4dff' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  orange: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#ff9800' },
-      secondary: { main: '#ffb74d' },
-      background: { default: '#fff3e0', paper: '#fff' },
-      text: { primary: '#e65100', secondary: '#ff9800' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  teal: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#009688' },
-      secondary: { main: '#4db6ac' },
-      background: { default: '#e0f2f1', paper: '#fff' },
-      text: { primary: '#004d40', secondary: '#009688' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  red: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#e53935' },
-      secondary: { main: '#ff8a65' },
-      background: { default: '#ffebee', paper: '#fff' },
-      text: { primary: '#b71c1c', secondary: '#e53935' },
-    },
-    shape: { borderRadius: 12 },
-  },
-  gray: {
-    palette: {
-      mode: 'light',
-      primary: { main: '#757575' },
-      secondary: { main: '#bdbdbd' },
-      background: { default: '#f5f5f5', paper: '#fff' },
-      text: { primary: '#212121', secondary: '#757575' },
-    },
-    shape: { borderRadius: 12 },
-  },
-};
-
 function App() {
   const [themeName, setThemeName] = useState<ThemeName>(() => {
-    const stored = localStorage.getItem('pos_theme_name') as ThemeName;
-    return stored && themeOptions[stored] ? stored : 'light';
+    const stored = localStorage.getItem('pos_theme_name');
+    return isThemeName(stored) ? stored : 'light';
   });
 
   useEffect(() => {
@@ -269,14 +165,14 @@ function App() {
   const themeContextValue = useMemo(
     () => ({
       setThemeName: (name: ThemeName) => {
-        if (themeOptions[name]) setThemeName(name);
+        if (isThemeName(name)) setThemeName(name);
       },
       themeName: themeName,
     }),
     [themeName]
   );
 
-  const theme = useMemo(() => createTheme(themeOptions[themeName]), [themeName]);
+  const theme = useMemo(() => buildTheme(themeName), [themeName]);
 
   // Check authentication state on app start
   useEffect(() => {
@@ -710,92 +606,30 @@ function App() {
               <PrinterProvider>
                 <ThemeProvider theme={theme}>
                   <CssBaseline />
-                  <Router>
-                    <Routes>
-                      <Route path="/login" element={<Login />} />
-                      <Route
-                        path="/"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <Basket />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/sales"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <SalesRecord />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/products"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <ManageProducts />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/receipts"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <Receipts />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/settings"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <Settings />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/customer-credit"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <CustomerCredit />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/staff"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <Staff />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route
-                        path="/gross-sales"
-                        element={
-                          <ProtectedRoute>
-                            <Layout>
-                              <GrossSales />
-                            </Layout>
-                          </ProtectedRoute>
-                        }
-                      />
-                      <Route path="*" element={<Navigate to="/login" replace />} />
-                    </Routes>
-                  </Router>
+                  <BasketProvider>
+                    <Router>
+                      <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route
+                          element={
+                            <ProtectedRoute>
+                              <Layout />
+                            </ProtectedRoute>
+                          }
+                        >
+                          <Route path="/" element={<Basket />} />
+                          <Route path="/sales" element={<SalesRecord />} />
+                          <Route path="/products" element={<ManageProducts />} />
+                          <Route path="/receipts" element={<Receipts />} />
+                          <Route path="/settings" element={<Settings />} />
+                          <Route path="/customer-credit" element={<CustomerCredit />} />
+                          <Route path="/staff" element={<Staff />} />
+                          <Route path="/gross-sales" element={<GrossSales />} />
+                        </Route>
+                        <Route path="*" element={<Navigate to="/login" replace />} />
+                      </Routes>
+                    </Router>
+                  </BasketProvider>
                 </ThemeProvider>
               </PrinterProvider>
             </GrossSalesContext.Provider>

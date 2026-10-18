@@ -1,6 +1,6 @@
 {
   "name": "pos-system",
-  "version": "1.22.0",
+  "version": "1.23.0",
   "private": true,
   "description": "Point of Sale System for KKK-A",
   "author": "KKK-A",
@@ -124,7 +124,7 @@
     ],
     "directories": {
       "buildResources": "assets",
-      "output": "dist-electron-1.22.0-installer"
+      "output": "dist-electron-1.23.0-installer"
     },
     "win": {
       "target": "nsis",

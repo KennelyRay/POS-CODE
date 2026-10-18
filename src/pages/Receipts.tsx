@@ -381,7 +381,7 @@ const Receipts: React.FC = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
+    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
       {/* Modern Header */}
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -870,7 +870,7 @@ const Receipts: React.FC = () => {
       >
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            bgcolor: 'banner.main',
             color: 'white',
             p: 4,
             display: 'flex',
@@ -1080,7 +1080,7 @@ const Receipts: React.FC = () => {
       >
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+            background: '#b91c1c',
             color: 'white',
             p: 4,
             display: 'flex',
@@ -1140,7 +1140,7 @@ const Receipts: React.FC = () => {
       >
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+            background: '#b91c1c',
             color: 'white',
             p: 4,
             display: 'flex',

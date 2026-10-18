@@ -492,7 +492,7 @@ const CustomerCredit: React.FC = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
+    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
       {/* Modern Header */}
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -994,7 +994,7 @@ const CustomerCredit: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            bgcolor: 'banner.main',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -1185,11 +1185,11 @@ const CustomerCredit: React.FC = () => {
               borderRadius: 3, 
               px: 4, 
               py: 1.5,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+              bgcolor: 'banner.main',
+              boxShadow: '0 4px 15px rgba(16, 24, 22, 0.4)',
               '&:hover': {
-                background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                bgcolor: 'banner.dark',
+                boxShadow: '0 6px 20px rgba(16, 24, 22, 0.6)',
               }
             }}
             disabled={!newCustomerName.trim()}
@@ -1217,7 +1217,7 @@ const CustomerCredit: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            background: '#0369a1',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -1313,10 +1313,10 @@ const CustomerCredit: React.FC = () => {
                     sx={{ 
                       borderRadius: 3, 
                       py: 1.5,
-                      background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                      background: '#0369a1',
                       boxShadow: '0 4px 15px rgba(79, 172, 254, 0.4)',
                       '&:hover': {
-                        background: 'linear-gradient(135deg, #3d8bfe 0%, #00d4fe 100%)',
+                        background: '#075985',
                         boxShadow: '0 6px 20px rgba(79, 172, 254, 0.6)',
                       }
                     }}
@@ -1335,10 +1335,10 @@ const CustomerCredit: React.FC = () => {
                       sx={{ 
                         borderRadius: 3, 
                         py: 1.5,
-                        background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                        background: '#15803d',
                         boxShadow: '0 4px 15px rgba(17, 153, 142, 0.4)',
                         '&:hover': {
-                          background: 'linear-gradient(135deg, #0f8b82 0%, #32d470 100%)',
+                          background: '#166534',
                           boxShadow: '0 6px 20px rgba(17, 153, 142, 0.6)',
                         }
                       }}
@@ -1522,7 +1522,7 @@ const CustomerCredit: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+            background: '#0e7490',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -1555,10 +1555,10 @@ const CustomerCredit: React.FC = () => {
               <AddIcon sx={{ fontSize: 32, color: 'white' }} />
             </Avatar>
             <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1, color: '#2d3748' }}>
+              <Typography variant="h4" fontWeight={800} sx={{ mb: 1, color: 'white' }}>
                 Add Credit Record
               </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.8, color: '#4a5568' }}>
+              <Typography variant="body1" sx={{ opacity: 0.85, color: 'white' }}>
                 Create a new credit entry for {addCreditDialog.customer}
               </Typography>
             </Box>
@@ -1740,11 +1740,11 @@ const CustomerCredit: React.FC = () => {
               borderRadius: 3, 
               px: 4, 
               py: 1.5,
-              background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
-              color: '#2d3748',
+              background: '#0e7490',
+              color: 'white',
               boxShadow: '0 4px 15px rgba(168, 237, 234, 0.4)',
               '&:hover': {
-                background: 'linear-gradient(135deg, #96e6e1 0%, #fcc9d9 100%)',
+                background: '#155e75',
                 boxShadow: '0 6px 20px rgba(168, 237, 234, 0.6)',
               }
             }}

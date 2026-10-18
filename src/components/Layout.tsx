@@ -1,19 +1,20 @@
-import React from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
+import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   AppBar,
   Box,
-  CssBaseline,
+  Chip,
   Drawer,
   IconButton,
   List,
-  ListItem,
+  ListItemButton,
   ListItemIcon,
   ListItemText,
   Toolbar,
   Typography,
   Tooltip,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   Menu as MenuIcon,
   ShoppingCart as CartIcon,
@@ -25,193 +26,263 @@ import {
   AccountBalanceWallet as WalletIcon,
   People as PeopleIcon,
   TrendingUp as TrendingUpIcon,
+  Print as PrintIcon,
+  DarkModeOutlined as DarkModeIcon,
+  LightModeOutlined as LightModeIcon,
+  Storefront as StorefrontIcon,
 } from '@mui/icons-material';
+import { StoreSettingsContext, ThemeContext } from '../App';
+import { useBasket } from '../contexts/BasketContext';
+import { usePrinter } from '../contexts/PrinterContext';
 
-const drawerWidth = 220;
+const drawerWidth = 248;
 
-interface LayoutProps {
-  children: React.ReactNode;
-}
+type NavItem = { text: string; icon: React.ReactElement; path: string };
 
-const KdsLogoMark: React.FC<{ size?: number }> = ({ size = 36 }) => (
-  <Box
-    sx={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 0.75,
-      flexShrink: 0,
-      userSelect: 'none',
-    }}
-  >
-    <CartIcon sx={{ fontSize: size, color: 'primary.main' }} />
-    <Typography
-      sx={{
-        fontWeight: 900,
-        letterSpacing: 2,
-        color: 'primary.main',
-        fontSize: Math.max(16, Math.round(size * 0.5)),
-        lineHeight: 1,
-      }}
-    >
-      KDS
-    </Typography>
-  </Box>
-);
+const navGroups: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: 'Sell',
+    items: [
+      { text: 'Basket', icon: <CartIcon />, path: '/' },
+      { text: 'Receipts', icon: <ReceiptIcon />, path: '/receipts' },
+      { text: 'Customer Credit', icon: <WalletIcon />, path: '/customer-credit' },
+    ],
+  },
+  {
+    label: 'Reports',
+    items: [
+      { text: 'Sales Record', icon: <AssessmentIcon />, path: '/sales' },
+      { text: 'Gross Sales', icon: <TrendingUpIcon />, path: '/gross-sales' },
+    ],
+  },
+  {
+    label: 'Manage',
+    items: [
+      { text: 'Products', icon: <InventoryIcon />, path: '/products' },
+      { text: 'Staff', icon: <PeopleIcon />, path: '/staff' },
+      { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+    ],
+  },
+];
 
-const Layout: React.FC<LayoutProps> = ({ children }) => {
+const useClock = () => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 15 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+};
+
+const Layout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [mobileOpen, setMobileOpen] = React.useState(false);
-  const menuItems = [
-    { text: 'Basket', icon: <CartIcon />, path: '/' },
-    { text: 'Sales Record', icon: <AssessmentIcon />, path: '/sales' },
-    { text: 'Gross Sales', icon: <TrendingUpIcon />, path: '/gross-sales' },
-    { text: 'Manage Products', icon: <InventoryIcon />, path: '/products' },
-    { text: 'Receipts', icon: <ReceiptIcon />, path: '/receipts' },
-    { text: 'Customer Credit', icon: <WalletIcon />, path: '/customer-credit' },
-    { text: 'Staff', icon: <PeopleIcon />, path: '/staff' },
-    { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
-  ];
+  const { storeName } = useContext(StoreSettingsContext);
+  const { themeName, setThemeName } = useContext(ThemeContext);
+  const { basket } = useBasket();
+  const { selectedPrinter } = usePrinter();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const now = useClock();
 
-  const handleDrawerToggle = () => {
-    setMobileOpen(!mobileOpen);
-  };
+  const basketCount = useMemo(() => basket.reduce((sum, item) => sum + item.quantity, 0), [basket]);
+  const isDark = themeName === 'dark';
 
   const drawer = (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <Toolbar sx={{ justifyContent: 'center', alignItems: 'center', display: 'flex' }}>
-        <Box sx={{ mr: 1 }}>
-          <KdsLogoMark size={40} />
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2.5, height: 64, flexShrink: 0 }}>
+        <Box
+          sx={{
+            width: 36,
+            height: 36,
+            borderRadius: '10px',
+            bgcolor: 'primary.main',
+            color: 'primary.contrastText',
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <StorefrontIcon fontSize="small" />
         </Box>
-      </Toolbar>
-      <List sx={{ flexGrow: 1 }}>
-        {menuItems.map((item) => (
-          <ListItem
-            button
-            key={item.text}
-            onClick={() => {
-              navigate(item.path);
-              setMobileOpen(false);
-            }}
-            selected={location.pathname === item.path}
-            sx={{
-              borderRadius: 2,
-              mb: 0.5,
-              bgcolor: location.pathname === item.path ? 'primary.100' : 'inherit',
-              '&.Mui-selected': {
-                bgcolor: 'primary.50',
-                color: 'primary.main',
-                fontWeight: 700,
-              },
-            }}
-          >
-            <ListItemIcon sx={{ color: location.pathname === item.path ? 'primary.main' : 'inherit' }}>{item.icon}</ListItemIcon>
-            <ListItemText primary={item.text} />
-          </ListItem>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography fontWeight={700} noWrap sx={{ lineHeight: 1.2 }}>
+            {storeName || 'My Store'}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.2 }}>
+            Point of Sale
+          </Typography>
+        </Box>
+      </Box>
+
+      <Box component="nav" sx={{ flexGrow: 1, overflowY: 'auto', px: 1.5, pb: 2 }}>
+        {navGroups.map((group) => (
+          <Box key={group.label} sx={{ mt: 2 }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ px: 1.5, fontSize: '0.6875rem', display: 'block', lineHeight: 2 }}
+            >
+              {group.label}
+            </Typography>
+            <List disablePadding>
+              {group.items.map((item) => {
+                const selected = location.pathname === item.path;
+                const showBasketBadge = item.path === '/' && basketCount > 0;
+                return (
+                  <ListItemButton
+                    key={item.path}
+                    selected={selected}
+                    onClick={() => {
+                      navigate(item.path);
+                      setMobileOpen(false);
+                    }}
+                    sx={{
+                      mb: 0.25,
+                      py: 0.875,
+                      color: 'text.secondary',
+                      '& .MuiListItemIcon-root': { color: 'inherit', minWidth: 38 },
+                      '&:hover': { color: 'text.primary' },
+                      '&.Mui-selected': {
+                        color: 'primary.main',
+                        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.14 : 0.09),
+                        '&:hover': {
+                          bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.2 : 0.13),
+                        },
+                      },
+                    }}
+                  >
+                    <ListItemIcon>{item.icon}</ListItemIcon>
+                    <ListItemText
+                      primary={item.text}
+                      primaryTypographyProps={{ fontWeight: selected ? 700 : 500, fontSize: '0.9375rem' }}
+                    />
+                    {showBasketBadge && (
+                      <Chip
+                        label={basketCount}
+                        size="small"
+                        color="primary"
+                        sx={{ height: 22, minWidth: 28, '& .MuiChip-label': { px: 0.75 } }}
+                      />
+                    )}
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          </Box>
         ))}
-      </List>
-      <Box sx={{ p: 2, textAlign: 'center' }}>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-          Version 1.22.0 (Updated 2026-07-01)
+      </Box>
+
+      <Box sx={{ px: 2.5, py: 2, borderTop: 1, borderColor: 'divider' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Version 1.23.0 · Updated 2026-10-18
         </Typography>
         <Typography variant="caption" color="text.secondary">
           Coded by Ken
         </Typography>
       </Box>
-    </div>
+    </Box>
   );
 
   return (
-    <Box sx={{ display: 'flex' }}>
-      <CssBaseline />
+    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
       <AppBar
         position="fixed"
-        elevation={1}
         sx={{
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
-          ml: { sm: `${drawerWidth}px` },
-          bgcolor: 'background.paper',
-          color: 'text.primary',
+          width: { md: `calc(100% - ${drawerWidth}px)` },
+          ml: { md: `${drawerWidth}px` },
+          bgcolor: (t) => alpha(t.palette.background.default, 0.85),
+          backdropFilter: 'blur(8px)',
+          borderBottom: 1,
+          borderColor: 'divider',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ gap: 1, minHeight: { xs: 64 } }}>
           <IconButton
-            color="inherit"
-            aria-label="open drawer"
+            aria-label="Open navigation"
             edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { sm: 'none' } }}
+            onClick={() => setMobileOpen(true)}
+            sx={{ display: { md: 'none' } }}
           >
             <MenuIcon />
           </IconButton>
-          <Box sx={{ mr: 1 }}>
-            <KdsLogoMark size={32} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography fontWeight={700} noWrap sx={{ lineHeight: 1.25 }}>
+              {now.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' })}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" noWrap sx={{ lineHeight: 1.25 }}>
+              {now.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}
+            </Typography>
           </Box>
           <Box sx={{ flexGrow: 1 }} />
-          <Tooltip title="Logout">
+          <Tooltip title={selectedPrinter ? `Printer: ${selectedPrinter}` : 'Choose a printer in Settings'}>
+            <Chip
+              icon={<PrintIcon />}
+              label={selectedPrinter ? 'Printer ready' : 'No printer'}
+              color={selectedPrinter ? 'success' : 'warning'}
+              variant="outlined"
+              size="small"
+              onClick={selectedPrinter ? undefined : () => navigate('/settings')}
+              sx={{ display: { xs: 'none', sm: 'inline-flex' }, bgcolor: 'background.paper' }}
+            />
+          </Tooltip>
+          <Tooltip title={isDark ? 'Switch to light theme' : 'Switch to dark theme'}>
+            <IconButton aria-label="Toggle theme" onClick={() => setThemeName(isDark ? 'light' : 'dark')}>
+              {isDark ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Log out">
             <IconButton
-              color="inherit"
+              aria-label="Log out"
               onClick={() => {
                 localStorage.removeItem('isAuthenticated');
                 navigate('/login');
               }}
-              sx={{ ml: 1 }}
             >
               <LogoutIcon />
             </IconButton>
           </Tooltip>
         </Toolbar>
       </AppBar>
-      <Box
-        component="nav"
-        sx={{ width: { sm: drawerWidth }, flexShrink: { sm: 0 } }}
-      >
+
+      <Box component="aside" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
         <Drawer
           variant="temporary"
           open={mobileOpen}
-          onClose={handleDrawerToggle}
-          ModalProps={{
-            keepMounted: true,
-          }}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
           sx={{
-            display: { xs: 'block', sm: 'none' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: drawerWidth,
-            },
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
           }}
         >
           {drawer}
         </Drawer>
         <Drawer
           variant="permanent"
-          sx={{
-            display: { xs: 'none', sm: 'block' },
-            '& .MuiDrawer-paper': {
-              boxSizing: 'border-box',
-              width: drawerWidth,
-            },
-          }}
           open
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: drawerWidth },
+          }}
         >
           {drawer}
         </Drawer>
       </Box>
+
       <Box
         component="main"
         sx={{
           flexGrow: 1,
-          p: { xs: 1, sm: 2 },
-          width: { sm: `calc(100% - ${drawerWidth}px)` },
-          minHeight: '100vh',
-          bgcolor: 'background.default',
+          minWidth: 0,
+          width: { md: `calc(100% - ${drawerWidth}px)` },
+          p: { xs: 1.5, md: 2.5 },
         }}
       >
         <Toolbar />
-        {children}
+        <Outlet />
       </Box>
     </Box>
   );
 };
 
-export default Layout; 
+export default Layout;

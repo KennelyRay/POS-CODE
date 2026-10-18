@@ -408,9 +408,9 @@ const GrossSales: React.FC = () => {
         PaperProps={{
           sx: {
             borderRadius: 4,
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            bgcolor: 'banner.main',
             color: 'white',
-            boxShadow: '0 15px 30px rgba(102, 126, 234, 0.3)',
+            boxShadow: '0 15px 30px rgba(16, 24, 22, 0.3)',
             overflow: 'hidden',
             position: 'relative',
           }
@@ -584,13 +584,7 @@ const GrossSales: React.FC = () => {
   }
 
   return (
-    <Box sx={{ 
-      p: { xs: 1.5, md: 2.5 }, 
-      minHeight: '100vh',
-      background: theme.palette.mode === 'dark' 
-        ? 'linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%)'
-        : 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
-    }}>
+    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
       {/* Compact Header */}
       <Fade in timeout={600}>
         <Box sx={{ mb: 3 }}>
@@ -599,20 +593,16 @@ const GrossSales: React.FC = () => {
             alignItems: 'center', 
             mb: 2,
             p: 2.5,
-            background: theme.palette.mode === 'dark'
-              ? 'linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%)'
-              : 'linear-gradient(135deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.6) 100%)',
+            bgcolor: 'background.paper',
             borderRadius: 3,
-            backdropFilter: 'blur(20px)',
             border: `1px solid ${theme.palette.divider}`,
-            boxShadow: '0 6px 24px rgba(0,0,0,0.1)',
           }}>
             <Box sx={{ 
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              bgcolor: 'banner.main',
               borderRadius: '50%',
               p: 1.5,
               mr: 2,
-              boxShadow: '0 6px 20px rgba(102, 126, 234, 0.3)',
+              boxShadow: '0 6px 20px rgba(16, 24, 22, 0.3)',
             }}>
               <TrendingUpIcon sx={{ fontSize: 28, color: 'white' }} />
             </Box>
@@ -656,7 +646,7 @@ const GrossSales: React.FC = () => {
           <Grid item xs={12} md={4}>
             <Card sx={{ 
               borderRadius: 3, 
-              background: 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)', 
+              background: '#15803d', 
               color: 'white', 
               height: '100%',
               boxShadow: '0 8px 25px rgba(76, 175, 80, 0.25)',
@@ -721,7 +711,7 @@ const GrossSales: React.FC = () => {
           <Grid item xs={12} md={4}>
             <Card sx={{ 
               borderRadius: 3, 
-              background: 'linear-gradient(135deg, #2196F3 0%, #1976d2 100%)', 
+              background: '#1d4ed8', 
               color: 'white', 
               height: '100%',
               boxShadow: '0 8px 25px rgba(33, 150, 243, 0.25)',
@@ -792,8 +782,8 @@ const GrossSales: React.FC = () => {
             <Card sx={{ 
               borderRadius: 3, 
               background: (dailyGrowthPercentage >= 0 
-                ? 'linear-gradient(135deg, #FF9800 0%, #f57c00 100%)'
-                : 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)'), 
+                ? '#b45309'
+                : '#b91c1c'), 
               color: 'white', 
               height: '100%',
               boxShadow: (dailyGrowthPercentage >= 0 
@@ -874,7 +864,7 @@ const GrossSales: React.FC = () => {
           border: `1px solid ${theme.palette.divider}`,
         }}>
           <Box sx={{ 
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', 
+            bgcolor: 'banner.main', 
             color: 'white', 
             p: 2.5,
             position: 'relative',
@@ -922,7 +912,7 @@ const GrossSales: React.FC = () => {
                   mx: 0.5,
                   transition: 'all 0.2s ease',
                   '&:hover': {
-                    bgcolor: 'rgba(102, 126, 234, 0.1)',
+                    bgcolor: 'rgba(16, 24, 22, 0.1)',
                   },
                   '&.Mui-selected': {
                     bgcolor: 'rgba(102, 126, 234, 0.15)',
@@ -932,7 +922,7 @@ const GrossSales: React.FC = () => {
                 '& .MuiTabs-indicator': {
                   height: 3,
                   borderRadius: 2,
-                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  bgcolor: 'banner.main',
                 }
               }}
             >
@@ -1098,7 +1088,7 @@ const GrossSales: React.FC = () => {
                   <Table size="small">
                     <TableHead>
                       <TableRow sx={{ 
-                        background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)',
+                        bgcolor: 'action.hover',
                         '& .MuiTableCell-head': {
                           fontWeight: 700,
                           fontSize: '0.85rem',
@@ -1300,14 +1290,14 @@ const GrossSales: React.FC = () => {
                           borderRadius: 2,
                           border: '1px solid',
                           borderColor: 'primary.200',
-                          boxShadow: '0 2px 10px rgba(102, 126, 234, 0.1)',
+                          boxShadow: '0 2px 10px rgba(16, 24, 22, 0.1)',
                         }}>
                           <Avatar sx={{ 
                             bgcolor: 'primary.main', 
                             color: 'white',
                             width: 40,
                             height: 40,
-                            boxShadow: '0 4px 15px rgba(102, 126, 234, 0.3)',
+                            boxShadow: '0 4px 15px rgba(16, 24, 22, 0.3)',
                           }}>
                             <CalendarIcon sx={{ fontSize: 20 }} />
                           </Avatar>
@@ -1345,7 +1335,7 @@ const GrossSales: React.FC = () => {
                           <Table size="small">
                             <TableHead>
                               <TableRow sx={{ 
-                                background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)',
+                                bgcolor: 'action.hover',
                                 '& .MuiTableCell-head': {
                                   fontWeight: 700,
                                   fontSize: '0.85rem',
@@ -1543,7 +1533,7 @@ const GrossSales: React.FC = () => {
                   <Table size="small">
                     <TableHead>
                       <TableRow sx={{ 
-                        background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)',
+                        bgcolor: 'action.hover',
                         '& .MuiTableCell-head': {
                           fontWeight: 700,
                           fontSize: '0.9rem',
@@ -1584,7 +1574,7 @@ const GrossSales: React.FC = () => {
                                     color: 'white',
                                     width: 36,
                                     height: 36,
-                                    boxShadow: '0 4px 15px rgba(102, 126, 234, 0.3)',
+                                    boxShadow: '0 4px 15px rgba(16, 24, 22, 0.3)',
                                   }}>
                                     <DateRangeIcon sx={{ fontSize: 18 }} />
                                   </Avatar>

@@ -1,45 +1,38 @@
 import React, { useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
-  Grid,
   TextField,
   Button,
   Card,
-  CardContent,
+  CardActionArea,
   Typography,
   IconButton,
-  Divider,
-  List,
-  ListItem,
   Snackbar,
   Alert,
   Chip,
   Dialog,
+  DialogTitle,
   DialogContent,
   DialogActions,
   Collapse,
-  Avatar,
-  Stack,
-  Badge,
-  Paper,
   InputAdornment,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
   Tooltip,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   Add as AddIcon,
   Remove as RemoveIcon,
-  Delete as DeleteIcon,
-  ShoppingCart as ShoppingCartIcon,
-  Receipt as ReceiptIcon,
+  DeleteOutline as DeleteIcon,
+  ShoppingCartOutlined as ShoppingCartIcon,
   Inventory2 as InventoryIcon,
-  ExpandLess as ExpandLessIcon,
+  ArrowBack as ArrowBackIcon,
   Category as CategoryIcon,
   Search as SearchIcon,
   Print as PrintIcon,
+  Close as CloseIcon,
+  EditOutlined as EditIcon,
+  CheckCircle as CheckCircleIcon,
+  QrCodeScanner as ScannerIcon,
   // Category-specific icons
   LocalBar as LiquorIcon,
   Store as BreadIcon,
@@ -74,11 +67,7 @@ import { ProductsContext, Product } from '../App';
 import { StoreSettingsContext } from '../App';
 import { GrossSalesContext } from '../App';
 import { usePrinter } from '../contexts/PrinterContext';
-import { useTheme } from '@mui/material/styles';
-
-interface BasketItem extends Product {
-  quantity: number;
-}
+import { BasketItem, useBasket } from '../contexts/BasketContext';
 
 const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
   if (!(element instanceof HTMLElement)) return false;
@@ -94,9 +83,75 @@ const createReceiptQrData = (receiptId: string) => {
   return `DISPLAY-${receiptId}-${randomSegment}`;
 };
 
-type BasketItemsListProps = {
-  basket: BasketItem[];
-  expandedItem: string | null;
+const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+
+// Totals are floating point sums, so allow half a centavo when comparing cash to the total.
+const MONEY_TOLERANCE = 0.005;
+const CASH_DENOMINATIONS = [20, 50, 100, 200, 500, 1000];
+
+const productGridSx = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))',
+  gap: 1.5,
+} as const;
+
+type ProductTileProps = {
+  product: Product;
+  quantityInBasket: number;
+  onAdd: (product: Product) => void;
+};
+
+const ProductTile = React.memo(function ProductTile({ product, quantityInBasket, onAdd }: ProductTileProps) {
+  const inBasket = quantityInBasket > 0;
+  return (
+    <Card
+      sx={{
+        borderColor: inBasket ? 'primary.main' : 'divider',
+        transition: 'border-color 0.15s, box-shadow 0.15s',
+        '&:hover': { boxShadow: 3 },
+      }}
+    >
+      <CardActionArea
+        onClick={() => onAdd(product)}
+        sx={{ height: '100%', p: 1.75, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1.5 }}
+      >
+        <Typography
+          fontWeight={600}
+          title={product.name}
+          sx={{
+            lineHeight: 1.3,
+            minHeight: '2.6em',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+        >
+          {product.name}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1, mt: 'auto' }}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="h6" color="primary.main" sx={{ lineHeight: 1.2 }}>
+              {formatPeso(product.price)}
+            </Typography>
+            <Typography variant="caption" color={product.quantity <= 0 ? 'error.main' : 'text.secondary'}>
+              Stock: {product.quantity}
+            </Typography>
+          </Box>
+          {inBasket ? (
+            <Chip size="small" color="primary" label={`×${quantityInBasket}`} />
+          ) : (
+            <AddIcon color="action" />
+          )}
+        </Box>
+      </CardActionArea>
+    </Card>
+  );
+});
+
+type CartLineProps = {
+  item: BasketItem;
+  isEditingPrice: boolean;
   setExpandedItem: React.Dispatch<React.SetStateAction<string | null>>;
   onRemoveItem: (id: string) => void;
   onUpdateQuantity: (id: string, change: number) => void;
@@ -104,202 +159,128 @@ type BasketItemsListProps = {
   onPriceChange: (id: string, newPrice: number) => void;
 };
 
-const BasketItemsList = React.memo(function BasketItemsList({
-  basket,
-  expandedItem,
+const CartLine = React.memo(function CartLine({
+  item,
+  isEditingPrice,
   setExpandedItem,
   onRemoveItem,
   onUpdateQuantity,
   onDirectQuantityChange,
   onPriceChange,
-}: BasketItemsListProps) {
+}: CartLineProps) {
+  // Drafts let the cashier clear a field while typing without it snapping back.
+  const [quantityDraft, setQuantityDraft] = useState(String(item.quantity));
+  const [priceDraft, setPriceDraft] = useState(String(item.price));
+
+  useEffect(() => setQuantityDraft(String(item.quantity)), [item.quantity]);
+  useEffect(() => setPriceDraft(String(item.price)), [item.price]);
+
   return (
-    <Stack spacing={2}>
-      {basket.map((item) => (
-        <Paper
-          key={item.id}
+    <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5 }}>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography fontWeight={600} noWrap title={item.name}>
+            {item.name}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {formatPeso(item.price)} each
+          </Typography>
+        </Box>
+        <Typography fontWeight={700}>{formatPeso(item.price * item.quantity)}</Typography>
+      </Box>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 1 }}>
+        <Box
           sx={{
-            p: 2,
-            borderRadius: 3,
-            border: '1px solid',
-            borderColor: expandedItem === item.id ? 'primary.main' : 'grey.200',
-            transition: 'all 0.3s',
-            '&:hover': {
-              borderColor: 'primary.main',
-              boxShadow: 3,
-            },
+            display: 'inline-flex',
+            alignItems: 'center',
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: '10px',
           }}
         >
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: expandedItem === item.id ? 2 : 0 }}>
-            <Box sx={{ flex: 1, cursor: 'pointer' }}>
-              <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                {item.name}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" gutterBottom>
-                {item.category}
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Typography variant="body2" color="primary.main" fontWeight={600}>
-                  {item.price.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })} each
-                </Typography>
-                <Chip
-                  size="small"
-                  label={`Qty: ${item.quantity}`}
-                  color="primary"
-                  sx={{ fontWeight: 600 }} 
-                />
-              </Box>
-            </Box>
-            <Box sx={{ textAlign: 'right', ml: 2, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-              <Typography variant="h6" fontWeight={700} color="primary.main">
-                {(item.price * item.quantity).toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-              </Typography>
-              <Box>
-                <IconButton
-                  size="small"
-                  color="primary"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setExpandedItem(item.id);
-                  }}
-                  sx={{ borderRadius: 2, bgcolor: 'primary.50', '&:hover': { bgcolor: 'primary.100' }, mr: 1 }}
-                  disabled={expandedItem === item.id}
-                >
-                  <span className="material-icons">edit</span>
-                </IconButton>
-                <IconButton
-                  size="small"
-                  color="error"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRemoveItem(item.id);
-                  }}
-                  sx={{
-                    borderRadius: 2,
-                    bgcolor: 'error.50',
-                    '&:hover': { bgcolor: 'error.100' },
-                    mt: 0.5
-                  }}
-                >
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </Box>
-            </Box>
-          </Box>
-          <Collapse in={expandedItem === item.id}>
-            <Divider sx={{ mb: 2 }} />
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
-              <IconButton
-                size="small"
-                color="default"
-                onClick={() => setExpandedItem(null)}
-                sx={{ borderRadius: 2 }}
-              >
-                <span className="material-icons">close</span>
-              </IconButton>
-            </Box>
-            <Grid container spacing={2} alignItems="center">
-              <Grid item xs={12} sm={6}>
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Quantity
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdateQuantity(item.id, -1);
-                    }}
-                    sx={{
-                      borderRadius: 2,
-                      bgcolor: 'grey.200',
-                      '&:hover': { bgcolor: 'grey.300' },
-                      width: 36,
-                      height: 36
-                    }}
-                  >
-                    <RemoveIcon fontSize="small" />
-                  </IconButton>
-                  <TextField
-                    value={item.quantity}
-                    onChange={(e) => {
-                      e.stopPropagation();
-                      const newQty = parseInt(e.target.value) || 1;
-                      onDirectQuantityChange(item.id, newQty);
-                    }}
-                    onClick={e => e.stopPropagation()}
-                    onFocus={e => e.stopPropagation()}
-                    size="small"
-                    type="number"
-                    sx={{
-                      width: 80,
-                      '& .MuiOutlinedInput-root': {
-                        borderRadius: 2,
-                        textAlign: 'center'
-                      },
-                      '& input': { textAlign: 'center', fontWeight: 700 }
-                    }}
-                    inputProps={{ min: 1 }}
-                  />
-                  <IconButton
-                    size="small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdateQuantity(item.id, 1);
-                    }}
-                    sx={{
-                      borderRadius: 2,
-                      bgcolor: 'grey.200',
-                      '&:hover': { bgcolor: 'grey.300' },
-                      width: 36,
-                      height: 36
-                    }}
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </Box>
-              </Grid>
+          <IconButton
+            size="small"
+            aria-label={`Decrease ${item.name}`}
+            onClick={() => onUpdateQuantity(item.id, -1)}
+            disabled={item.quantity <= 1}
+          >
+            <RemoveIcon fontSize="small" />
+          </IconButton>
+          <Box
+            component="input"
+            type="number"
+            min={1}
+            aria-label={`Quantity of ${item.name}`}
+            value={quantityDraft}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              setQuantityDraft(e.target.value);
+              const next = parseInt(e.target.value, 10);
+              if (next >= 1) onDirectQuantityChange(item.id, next);
+            }}
+            onBlur={() => setQuantityDraft(String(item.quantity))}
+            sx={{
+              width: 44,
+              border: 0,
+              outline: 0,
+              bgcolor: 'transparent',
+              color: 'text.primary',
+              font: 'inherit',
+              fontWeight: 700,
+              textAlign: 'center',
+              MozAppearance: 'textfield',
+              '&::-webkit-outer-spin-button, &::-webkit-inner-spin-button': { WebkitAppearance: 'none', m: 0 },
+            }}
+          />
+          <IconButton size="small" aria-label={`Increase ${item.name}`} onClick={() => onUpdateQuantity(item.id, 1)}>
+            <AddIcon fontSize="small" />
+          </IconButton>
+        </Box>
+        <Box>
+          <Tooltip title={isEditingPrice ? 'Close price editor' : 'Edit price'}>
+            <IconButton
+              size="small"
+              aria-label={`Edit price of ${item.name}`}
+              color={isEditingPrice ? 'primary' : 'default'}
+              onClick={() => setExpandedItem((current) => (current === item.id ? null : item.id))}
+            >
+              <EditIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Remove">
+            <IconButton size="small" aria-label={`Remove ${item.name}`} onClick={() => onRemoveItem(item.id)}>
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      </Box>
 
-              <Grid item xs={12} sm={6}>
-                <Typography variant="body2" color="text.secondary" gutterBottom>
-                  Unit Price
-                </Typography>
-                <TextField
-                  value={item.price.toString()}
-                  onChange={(e) => {
-                    e.stopPropagation();
-                    const value = e.target.value;
-                    if (value === '') {
-                      return;
-                    }
-                    const newPrice = parseFloat(value);
-                    if (!isNaN(newPrice)) {
-                      onPriceChange(item.id, newPrice);
-                    }
-                  }}
-                  onClick={e => e.stopPropagation()}
-                  onFocus={e => e.stopPropagation()}
-                  size="small"
-                  type="number"
-                  fullWidth
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">₱</InputAdornment>
-                    ),
-                  }}
-                  sx={{
-                    '& .MuiOutlinedInput-root': { borderRadius: 2 },
-                    '& input': { fontWeight: 600 }
-                  }}
-                  inputProps={{ min: 0, step: 0.01 }}
-                  placeholder=""
-                />
-              </Grid>
-            </Grid>
-          </Collapse>
-        </Paper>
-      ))}
-    </Stack>
+      <Collapse in={isEditingPrice} unmountOnExit>
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1.5 }}>
+          <TextField
+            label="Unit price"
+            size="small"
+            type="number"
+            fullWidth
+            value={priceDraft}
+            onChange={(e) => {
+              setPriceDraft(e.target.value);
+              const next = parseFloat(e.target.value);
+              if (!isNaN(next) && next >= 0) onPriceChange(item.id, next);
+            }}
+            onBlur={() => setPriceDraft(String(item.price))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') setExpandedItem(null);
+            }}
+            InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+            inputProps={{ min: 0, step: 0.01 }}
+          />
+          <Button variant="outlined" onClick={() => setExpandedItem(null)}>
+            Done
+          </Button>
+        </Box>
+      </Collapse>
+    </Box>
   );
 });
 
@@ -308,8 +289,8 @@ const Basket: React.FC = () => {
   const storeSettings = useContext(StoreSettingsContext);
   const { recordGrossSales } = useContext(GrossSalesContext);
   const { selectedPrinter, printReceipt, testPrint, openCashDrawer } = usePrinter();
+  const { basket, setBasket } = useBasket();
   const [searchQuery, setSearchQuery] = useState('');
-  const [basket, setBasket] = useState<BasketItem[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
   const [customerMoney, setCustomerMoney] = useState<string>('');
@@ -322,9 +303,8 @@ const Basket: React.FC = () => {
     change: number;
   } | null>(null);
   const [receiptData, setReceiptData] = useState<any>(null);
-  const theme = useTheme();
-  
-  // New state for improved design
+
+  // Basket line whose price editor is open
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
 
   const searchQueryRef = useRef(searchQuery);
@@ -346,7 +326,7 @@ const Basket: React.FC = () => {
       setSearchQuery('');
       resetInactivityTimer();
     }, 5 * 60 * 1000);
-  }, []);
+  }, [setBasket]);
 
   useEffect(() => {
     resetInactivityTimer();
@@ -504,12 +484,6 @@ const Basket: React.FC = () => {
     }
   };
 
-  // Function to get category-specific color
-  const getCategoryColor = (categoryName: string) => {
-    // Return the same color for all categories - using the theme's primary color
-    return theme.palette.primary.main;
-  };
-
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
 
@@ -552,10 +526,15 @@ const Basket: React.FC = () => {
   }, [products]);
 
   const total = useMemo(() => basket.reduce((sum, item) => sum + item.price * item.quantity, 0), [basket]);
+  const itemCount = useMemo(() => basket.reduce((sum, item) => sum + item.quantity, 0), [basket]);
+  const quickCashAmounts = useMemo(
+    () => CASH_DENOMINATIONS.filter((amount) => amount > total + MONEY_TOLERANCE).slice(0, 4),
+    [total]
+  );
   const parsedCustomerMoney = customerMoney.trim() === '' ? Number.NaN : Number(customerMoney);
   const hasValidCustomerMoney = Number.isFinite(parsedCustomerMoney) && parsedCustomerMoney >= 0;
-  const isCustomerMoneyEnough = hasValidCustomerMoney && parsedCustomerMoney >= total;
-  const currentChange = isCustomerMoneyEnough ? parsedCustomerMoney - total : 0;
+  const isCustomerMoneyEnough = hasValidCustomerMoney && parsedCustomerMoney >= total - MONEY_TOLERANCE;
+  const currentChange = isCustomerMoneyEnough ? Math.max(0, parsedCustomerMoney - total) : 0;
 
   const productsByCategory = useMemo(() => {
     if (selectedCategory !== 'All' || normalizedSearchQuery) return [];
@@ -595,7 +574,7 @@ const Basket: React.FC = () => {
       setSnackbar({ open: true, message: 'Added to basket', severity: 'success' });
       return [...prevBasket, { ...product, quantity: 1 }];
     });
-  }, [setSnackbar]);
+  }, [setBasket, setSnackbar]);
 
   const pendingScanProductsRef = useRef<Product[]>([]);
   const pendingScanNotFoundCountRef = useRef(0);
@@ -814,7 +793,7 @@ const Basket: React.FC = () => {
         })
         .filter((item) => item.quantity > 0)
     );
-  }, []);
+  }, [setBasket]);
 
   const handleDirectQuantityChange = useCallback((id: string, newQuantity: number) => {
     if (newQuantity < 1) return;
@@ -826,7 +805,7 @@ const Basket: React.FC = () => {
         return item;
       })
     );
-  }, []);
+  }, [setBasket]);
 
   const handlePriceChange = useCallback((id: string, newPrice: number) => {
     if (newPrice < 0) return;
@@ -838,12 +817,12 @@ const Basket: React.FC = () => {
         return item;
       })
     );
-  }, []);
+  }, [setBasket]);
 
   const handleRemoveItem = useCallback((id: string) => {
     setBasket((prevBasket) => prevBasket.filter((item) => item.id !== id));
     setSnackbar({ open: true, message: 'Removed from basket', severity: 'info' });
-  }, [setSnackbar]);
+  }, [setBasket, setSnackbar]);
 
   const handleCheckout = () => {
     if (basket.length === 0) return;
@@ -1003,507 +982,266 @@ const Basket: React.FC = () => {
     }
   };
 
+  const clearBasket = () => {
+    setBasket([]);
+    setCustomerMoney('');
+    setExpandedItem(null);
+    setPaymentDetails(null);
+    setShowPaymentSummary(false);
+    setShowPrintDialog(false);
+    setSnackbar({ open: true, message: 'Basket cleared', severity: 'info' });
+  };
+
+  const renderProductGrid = (list: Product[]) => (
+    <Box sx={productGridSx}>
+      {list.map((product) => (
+        <ProductTile
+          key={product.id}
+          product={product}
+          quantityInBasket={basketById.get(product.id)?.quantity ?? 0}
+          onAdd={handleAddToBasket}
+        />
+      ))}
+    </Box>
+  );
+
+  const categoryChip = (name: string, label: string, icon: React.ReactElement, basketCount: number) => {
+    const selected = !searchQuery.trim() && selectedCategory === name;
+    return (
+      <Chip
+        key={name}
+        icon={React.cloneElement(icon, { sx: { fontSize: 18 } })}
+        label={basketCount > 0 ? `${label} · ${basketCount}` : label}
+        color={selected ? 'primary' : 'default'}
+        variant={selected ? 'filled' : 'outlined'}
+        onClick={() => {
+          setSearchQuery('');
+          setSelectedCategory(name);
+        }}
+        sx={{ flexShrink: 0, height: 36, px: 0.5, bgcolor: selected ? undefined : 'background.paper' }}
+      />
+    );
+  };
+
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
-      {/* Modern Header */}
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main', width: 56, height: 56 }}>
-              <ShoppingCartIcon sx={{ fontSize: 32 }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} color="primary.main">
-                Point of Sale
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Select products and manage your sales
-              </Typography>
-            </Box>
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) 400px' },
+        gap: 2.5,
+        alignItems: 'start',
+      }}
+    >
+      {/* Product picker */}
+      <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 2 }}>
+          <Box>
+            <Typography variant="h5">New sale</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <ScannerIcon sx={{ fontSize: 18 }} />
+              Scan a barcode anytime, or tap a product to add it.
+            </Typography>
           </Box>
-          <Stack direction="row" spacing={2}>
-            <Button
-              variant="contained"
-              startIcon={<ReceiptIcon />}
-              onClick={handleCheckout}
-              disabled={basket.length === 0}
-              sx={{ borderRadius: 3, px: 3, fontWeight: 700 }}
-            >
-              Process Payment
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<PrintIcon />}
-              onClick={handlePrintTestReceipt}
-              disabled={!selectedPrinter}
-              sx={{ borderRadius: 3, px: 3, fontWeight: 700 }}
-            >
-              Test Print
-            </Button>
-          </Stack>
+          <Button
+            variant="outlined"
+            startIcon={<PrintIcon />}
+            onClick={handlePrintTestReceipt}
+            disabled={!selectedPrinter}
+            sx={{ flexShrink: 0 }}
+          >
+            Test print
+          </Button>
         </Box>
-      </Box>
 
-      {/* Printer Status */}
-      <Box sx={{ mb: 3 }}>
-        <Card sx={{ borderRadius: 3, boxShadow: 1, bgcolor: selectedPrinter ? 'success.50' : 'warning.50' }}>
-          <CardContent sx={{ py: 2, px: 3, '&:last-child': { pb: 2 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <PrintIcon color={selectedPrinter ? 'success' : 'warning'} />
-                <Typography variant="body2" fontWeight={600}>
-                  {selectedPrinter ? `Printer: ${selectedPrinter}` : 'No thermal printer selected'}
+        <TextField
+          fullWidth
+          placeholder="Search by product name or barcode"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon color="action" />
+              </InputAdornment>
+            ),
+            endAdornment: searchQuery ? (
+              <InputAdornment position="end">
+                <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                  <CloseIcon fontSize="small" />
+                </IconButton>
+              </InputAdornment>
+            ) : undefined,
+          }}
+        />
+
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            overflowX: 'auto',
+            py: 1.5,
+            mb: 0.5,
+          }}
+        >
+          {categoryChip('All', 'All categories', <InventoryIcon />, 0)}
+          {categories.map((category) =>
+            categoryChip(
+              category.name,
+              category.name,
+              getCategoryIcon(category.name),
+              basketCountByCategory.get(category.name) ?? 0
+            )
+          )}
+        </Box>
+
+        {searchQuery.trim() ? (
+          <Box>
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5 }}>
+              {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for “{searchQuery.trim()}”
+            </Typography>
+            {searchResults.length === 0 ? (
+              <Card sx={{ textAlign: 'center', py: 6, px: 3 }}>
+                <SearchIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+                <Typography fontWeight={600}>No products match your search</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Check the spelling, or pick a category above.
                 </Typography>
-              </Box>
-              <Chip
-                label={selectedPrinter ? 'Ready' : 'Not Available'}
-                color={selectedPrinter ? 'success' : 'warning'}
-                size="small"
-                sx={{ fontWeight: 700 }}
-              />
-            </Box>
-          </CardContent>
-        </Card>
-      </Box>
-
-      <Grid container spacing={3}>
-        {/* Left side - Category-based Product Selection */}
-        <Grid item xs={12} lg={8}>
-          <Card sx={{ borderRadius: 3, boxShadow: 3, height: 'fit-content' }}>
-            {/* Search and Filter Header */}
-            <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <TextField
-                  fullWidth
-                  placeholder="Search products..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchIcon color="action" />
-                      </InputAdornment>
-                    ),
-                  }}
-                  sx={{ 
-                    '& .MuiOutlinedInput-root': { borderRadius: 3 }
-                  }}
-                />
-              </Stack>
-            </Box>
-
-            {/* Category Filter */}
-            <Box sx={{ p: 3, borderBottom: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="h6" fontWeight={700} gutterBottom>
-                Browse by Category
+              </Card>
+            ) : (
+              renderProductGrid(searchResults)
+            )}
+          </Box>
+        ) : selectedCategory === 'All' ? (
+          productsByCategory.length === 0 ? (
+            <Card sx={{ textAlign: 'center', py: 6, px: 3 }}>
+              <InventoryIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+              <Typography fontWeight={600}>No products yet</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Add products under Manage › Products to start selling.
               </Typography>
-              <Grid container spacing={2} alignItems="center">
-                <Grid item xs={12} md={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Select Category</InputLabel>
-                    <Select
-                      value={selectedCategory}
-                      label="Select Category"
-                      onChange={(e) => setSelectedCategory(e.target.value)}
-                      startAdornment={<CategoryIcon color="action" sx={{ mr: 1 }} />}
-                      sx={{ borderRadius: 3 }}
-                    >
-                      <MenuItem value="All">
-                        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Avatar sx={{ width: 24, height: 24, bgcolor: 'primary.main' }}>
-                              <InventoryIcon sx={{ fontSize: 14 }} />
-                            </Avatar>
-                            <Typography>All Categories</Typography>
-                          </Box>
-                          <Badge badgeContent={products.length} color="primary" />
-                        </Box>
-                      </MenuItem>
-                      {categories.map((category) => {
-                        const categoryProducts = products.filter(p => p.category === category.name);
-                        const itemsInBasket = basket.filter(item => item.category === category.name).length;
-                        return (
-                          <MenuItem key={category.id} value={category.name}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                <Avatar sx={{ width: 24, height: 24, bgcolor: getCategoryColor(category.name) }}>
-                                  {React.cloneElement(getCategoryIcon(category.name), { sx: { fontSize: 14 } })}
-                                </Avatar>
-                                <Typography>{category.name}</Typography>
-                              </Box>
-                              <Box sx={{ display: 'flex', gap: 1 }}>
-                                <Badge badgeContent={categoryProducts.length} color="secondary" />
-                                {itemsInBasket > 0 && (
-                                  <Badge badgeContent={itemsInBasket} color="success" />
-                                )}
-                              </Box>
-                            </Box>
-                          </MenuItem>
-                        );
-                      })}
-                    </Select>
-                  </FormControl>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                    <Chip
-                      label={`${selectedCategory === 'All' ? 'All' : selectedCategory}`}
-                      color="primary"
-                      variant="filled"
-                      sx={{ fontWeight: 700 }}
-                    />
-                    {selectedCategory !== 'All' && (
-                      <Chip
-                        label="Clear Filter"
-                        variant="outlined"
-                        clickable
-                        onClick={() => setSelectedCategory('All')}
-                        size="small"
-                        sx={{ '&:hover': { bgcolor: 'grey.100' } }}
-                      />
-                    )}
-                  </Box>
-                </Grid>
-              </Grid>
-            </Box>
-
-            {/* Products Display */}
-            <Box sx={{ p: 3 }}>
-              {searchQuery.trim() ? (
-                // Show search results directly when searching
-                <Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-                    <Button
-                      startIcon={<ExpandLessIcon />}
-                      onClick={() => setSearchQuery('')}
-                      sx={{ borderRadius: 2 }}
-                    >
-                      Clear Search
-                    </Button>
-                    <Typography variant="h6" fontWeight={700}>
-                      Search Results for "{searchQuery}"
-                    </Typography>
-                    <Chip
-                      label={`${searchResults.length} product${searchResults.length !== 1 ? 's' : ''} found`}
-                      color="primary"
-                      variant="outlined"
-                    />
-                  </Box>
-                  
-                  {searchResults.length === 0 ? (
-                    <Box sx={{ textAlign: 'center', py: 6 }}>
-                      <SearchIcon sx={{ fontSize: 80, color: 'grey.300', mb: 2 }} />
-                      <Typography variant="h6" color="text.secondary" gutterBottom>
-                        No products found
-                      </Typography>
+            </Card>
+          ) : (
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 1.5 }}>
+              {productsByCategory.map((category) => (
+                <Card key={category.name}>
+                  <CardActionArea
+                    onClick={() => setSelectedCategory(category.name)}
+                    sx={{ p: 2, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1.5 }}
+                  >
+                    <Box sx={{ display: 'flex', width: '100%', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                      <Box
+                        sx={{
+                          width: 44,
+                          height: 44,
+                          borderRadius: '12px',
+                          display: 'grid',
+                          placeItems: 'center',
+                          color: 'primary.main',
+                          bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+                        }}
+                      >
+                        {getCategoryIcon(category.name)}
+                      </Box>
+                      {category.itemsInBasket > 0 && (
+                        <Chip size="small" color="primary" label={`${category.itemsInBasket} in basket`} />
+                      )}
+                    </Box>
+                    <Box>
+                      <Typography fontWeight={700}>{category.name}</Typography>
                       <Typography variant="body2" color="text.secondary">
-                        Try adjusting your search terms or browse by category
+                        {category.products.length} product{category.products.length !== 1 ? 's' : ''}
                       </Typography>
                     </Box>
-                  ) : (
-                    <Grid container spacing={2}>
-                      {searchResults.map((product) => {
-                        const basketItem = basketById.get(product.id);
-                        return (
-                          <Grid item xs={12} sm={6} md={4} lg={3} key={product.id}>
-                            <Card
-                              sx={{
-                                borderRadius: 3,
-                                transition: 'all 0.3s',
-                                '&:hover': {
-                                  transform: 'translateY(-2px)',
-                                  boxShadow: 4,
-                                },
-                                border: '1px solid',
-                                borderColor: basketItem ? 'success.main' : 'grey.200',
-                                position: 'relative',
-                              }}
-                            >
-                              {basketItem && (
-                                <Chip
-                                  label={`${basketItem.quantity} in basket`}
-                                  size="small"
-                                  color="success"
-                                  sx={{
-                                    position: 'absolute',
-                                    top: 8,
-                                    right: 8,
-                                    zIndex: 1,
-                                    fontWeight: 600,
-                                  }}
-                                />
-                              )}
-                              <CardContent sx={{ p: 2 }}>
-                                <Tooltip title={product.name} placement="top">
-                                  <Typography variant="subtitle1" fontWeight={700} gutterBottom noWrap>
-                                    {product.name}
-                                  </Typography>
-                                </Tooltip>
-                                <Typography variant="h6" color="primary.main" fontWeight={700} gutterBottom>
-                                  {product.price.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary" gutterBottom>
-                                  Stock: {product.quantity}
-                                </Typography>
-                                <Button
-                                  variant="contained"
-                                  fullWidth
-                                  startIcon={<AddIcon />}
-                                  onClick={() => handleAddToBasket(product)}
-                                  sx={{ 
-                                    mt: 1,
-                                    borderRadius: 2,
-                                    fontWeight: 600
-                                  }}
-                                >
-                                  Add to Basket
-                                </Button>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        );
-                      })}
-                    </Grid>
-                  )}
-                </Box>
-              ) : selectedCategory === 'All' ? (
-                // Show categories when "All" is selected and no search
-                <Box>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    Product Categories
-                  </Typography>
-                  <Grid container spacing={2}>
-                    {productsByCategory.map((category) => (
-                      <Grid item xs={12} sm={6} md={4} key={category.name}>
-                        <Card
-                          sx={{
-                            borderRadius: 3,
-                            transition: 'all 0.3s',
-                            cursor: 'pointer',
-                            '&:hover': {
-                              transform: 'translateY(-4px)',
-                              boxShadow: 6,
-                            },
-                            border: '1px solid',
-                            borderColor: 'grey.200',
-                          }}
-                          onClick={() => setSelectedCategory(category.name)}
-                        >
-                          <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                            <Avatar
-                              sx={{
-                                bgcolor: getCategoryColor(category.name),
-                                width: 64,
-                                height: 64,
-                                mx: 'auto',
-                                mb: 2,
-                              }}
-                            >
-                              {React.cloneElement(getCategoryIcon(category.name), { sx: { fontSize: 32 } })}
-                            </Avatar>
-                            <Typography variant="h6" fontWeight={700} gutterBottom>
-                              {category.name}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary" gutterBottom>
-                              {category.products.length} products available
-                            </Typography>
-                            {category.itemsInBasket > 0 && (
-                              <Chip
-                                size="small"
-                                label={`${category.itemsInBasket} in basket`}
-                                color="success"
-                                sx={{ mt: 1 }}
-                              />
-                            )}
-                          </CardContent>
-                        </Card>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </Box>
-              ) : (
-                // Show products when a specific category is selected
-                <Box>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-                    <Button
-                      startIcon={<ExpandLessIcon />}
-                      onClick={() => setSelectedCategory('All')}
-                      sx={{ borderRadius: 2 }}
-                    >
-                      Back to Categories
-                    </Button>
-                    <Typography variant="h6" fontWeight={700}>
-                      {selectedCategory} Products
-                    </Typography>
-                  </Box>
-                  <Grid container spacing={2}>
-                    {productsInSelectedCategory.map((product) => {
-                        const basketItem = basketById.get(product.id);
-                        return (
-                          <Grid item xs={12} sm={6} md={4} lg={3} key={product.id}>
-                            <Card
-                              sx={{
-                                borderRadius: 3,
-                                transition: 'all 0.3s',
-                                '&:hover': {
-                                  transform: 'translateY(-2px)',
-                                  boxShadow: 4,
-                                },
-                                border: '1px solid',
-                                borderColor: basketItem ? 'success.main' : 'grey.200',
-                                position: 'relative',
-                              }}
-                            >
-                              {basketItem && (
-                                <Chip
-                                  label={`${basketItem.quantity} in basket`}
-                                  size="small"
-                                  color="success"
-                                  sx={{
-                                    position: 'absolute',
-                                    top: 8,
-                                    right: 8,
-                                    zIndex: 1,
-                                    fontWeight: 600,
-                                  }}
-                                />
-                              )}
-                              <CardContent sx={{ p: 2 }}>
-                                <Tooltip title={product.name} placement="top">
-                                  <Typography variant="subtitle1" fontWeight={700} gutterBottom noWrap>
-                                    {product.name}
-                                  </Typography>
-                                </Tooltip>
-                                <Typography variant="h6" color="primary.main" fontWeight={700} gutterBottom>
-                                  {product.price.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary" gutterBottom>
-                                  Stock: {product.quantity}
-                                </Typography>
-                                <Button
-                                  variant="contained"
-                                  fullWidth
-                                  startIcon={<AddIcon />}
-                                  onClick={() => handleAddToBasket(product)}
-                                  sx={{ 
-                                    mt: 1,
-                                    borderRadius: 2,
-                                    fontWeight: 600
-                                  }}
-                                >
-                                  Add to Basket
-                                </Button>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        );
-                      })}
-                  </Grid>
-                </Box>
-              )}
+                  </CardActionArea>
+                </Card>
+              ))}
             </Box>
-          </Card>
-        </Grid>
-
-        {/* Right side - Modern Basket */}
-        <Grid item xs={12} lg={4}>
-          <Card sx={{ borderRadius: 3, boxShadow: 3, position: 'sticky', top: 24 }}>
-            {/* Basket Header */}
-            <Box sx={{ 
-              p: 3, 
-              borderBottom: '1px solid', 
-              borderColor: 'divider',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              color: 'white',
-              borderRadius: '12px 12px 0 0'
-            }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <ShoppingCartIcon sx={{ fontSize: 32 }} />
-                  <Box>
-                    <Typography variant="h6" fontWeight={700}>
-                      Shopping Basket
-                    </Typography>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                      {basket.length} {basket.length === 1 ? 'item' : 'items'}
-                    </Typography>
-                  </Box>
-                </Box>
-                <Typography variant="h5" fontWeight={800}>
-                  {total.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                </Typography>
-              </Box>
+          )
+        ) : (
+          <Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+              <IconButton aria-label="Back to categories" onClick={() => setSelectedCategory('All')} size="small">
+                <ArrowBackIcon fontSize="small" />
+              </IconButton>
+              <Typography variant="h6">{selectedCategory}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {productsInSelectedCategory.length} product{productsInSelectedCategory.length !== 1 ? 's' : ''}
+              </Typography>
             </Box>
+            {renderProductGrid(productsInSelectedCategory)}
+          </Box>
+        )}
+      </Box>
 
-            {/* Basket Items */}
-            <Box sx={{ maxHeight: 400, overflowY: 'auto' }}>
-              {basket.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 6, px: 3 }}>
-                  <ShoppingCartIcon sx={{ fontSize: 80, color: 'grey.300', mb: 2 }} />
-                  <Typography variant="h6" color="text.secondary" gutterBottom>
-                    Your basket is empty
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Browse categories and add products to get started
-                  </Typography>
-                </Box>
-              ) : (
-                <Box sx={{ p: 2 }}>
-                  <BasketItemsList
-                    basket={basket}
-                    expandedItem={expandedItem}
-                    setExpandedItem={setExpandedItem}
-                    onRemoveItem={handleRemoveItem}
-                    onUpdateQuantity={handleUpdateQuantity}
-                    onDirectQuantityChange={handleDirectQuantityChange}
-                    onPriceChange={handlePriceChange}
-                  />
-                </Box>
-              )}
+      {/* Current sale */}
+      <Card
+        sx={{
+          position: { lg: 'sticky' },
+          top: { lg: 84 },
+          display: 'flex',
+          flexDirection: 'column',
+          maxHeight: { lg: 'calc(100vh - 104px)' },
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="h6">Current sale</Typography>
+            {itemCount > 0 && <Chip size="small" label={`${itemCount} item${itemCount !== 1 ? 's' : ''}`} />}
+          </Box>
+          {basket.length > 0 && (
+            <Button color="error" size="small" onClick={clearBasket}>
+              Clear
+            </Button>
+          )}
+        </Box>
+
+        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          {basket.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
+              <ShoppingCartIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
+              <Typography fontWeight={600}>Basket is empty</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Scanned and tapped items appear here.
+              </Typography>
             </Box>
+          ) : (
+            basket.map((item) => (
+              <CartLine
+                key={item.id}
+                item={item}
+                isEditingPrice={expandedItem === item.id}
+                setExpandedItem={setExpandedItem}
+                onRemoveItem={handleRemoveItem}
+                onUpdateQuantity={handleUpdateQuantity}
+                onDirectQuantityChange={handleDirectQuantityChange}
+                onPriceChange={handlePriceChange}
+              />
+            ))
+          )}
+        </Box>
 
-            {/* Checkout Section */}
-            {basket.length > 0 && (
-              <Box sx={{ p: 3, borderTop: '1px solid', borderColor: 'divider' }}>
-                <Stack spacing={2}>
-                  <Button
-                    fullWidth
-                    variant="outlined"
-                    color="error"
-                    onClick={() => {
-                      setBasket([]);
-                      setCustomerMoney('');
-                      setExpandedItem(null);
-                      setPaymentDetails(null);
-                      setShowPaymentSummary(false);
-                      setShowPrintDialog(false);
-                      setSnackbar({ open: true, message: 'Basket cleared', severity: 'info' });
-                    }}
-                    sx={{ borderRadius: 3, py: 1.5 }}
-                  >
-                    Clear Basket
-                  </Button>
-                  
-                  <Button
-                    fullWidth
-                    variant="contained"
-                    size="large"
-                    onClick={handleCheckout}
-                    sx={{ 
-                      borderRadius: 3, 
-                      py: 2, 
-                      fontWeight: 700,
-                      fontSize: 16
-                    }}
-                  >
-                    Process Payment
-                  </Button>
-                </Stack>
-              </Box>
-            )}
-          </Card>
-        </Grid>
-      </Grid>
+        <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
+          <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', mb: 1.5 }}>
+            <Typography color="text.secondary" fontWeight={600}>
+              Total
+            </Typography>
+            <Typography variant="h4" component="p">
+              {formatPeso(total)}
+            </Typography>
+          </Box>
+          <Button
+            fullWidth
+            variant="contained"
+            size="large"
+            onClick={handleCheckout}
+            disabled={basket.length === 0}
+            sx={{ py: 1.5, fontSize: '1.0625rem' }}
+          >
+            Take payment
+          </Button>
+        </Box>
+      </Card>
+
       <Snackbar
         open={snackbar.open}
         autoHideDuration={2000}
@@ -1515,220 +1253,156 @@ const Basket: React.FC = () => {
         </Alert>
       </Snackbar>
 
-      {/* Payment Summary Dialog */}
-      <Dialog 
-        open={showPaymentSummary} 
-        onClose={() => setShowPaymentSummary(false)}
-        maxWidth="xs"
-        fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 4,
-            boxShadow: 8,
-            overflow: 'hidden',
-            bgcolor: 'background.paper',
-          }
-        }}
-      >
-        {/* Gradient Header */}
-        <Box sx={{
-          p: 0,
-          m: 0,
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          color: 'white',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          borderTopLeftRadius: 16,
-          borderTopRightRadius: 16,
-        }}>
-          <ReceiptIcon sx={{ fontSize: 36, ml: 3, my: 2 }} />
-          <Typography variant="h5" fontWeight={800} sx={{ py: 2 }}>
-            Process Payment
-          </Typography>
-        </Box>
-        <DialogContent sx={{ p: 0 }}>
-          <Box sx={{ py: 3, px: 3 }}>
-            <Typography variant="subtitle1" fontWeight={700} gutterBottom color="primary.main">
-              Items in Basket
+      {/* Payment Dialog */}
+      <Dialog open={showPaymentSummary} onClose={() => setShowPaymentSummary(false)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pr: 1.5 }}>
+          Take payment
+          <IconButton aria-label="Close" onClick={() => setShowPaymentSummary(false)}>
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          <Box
+            sx={{
+              textAlign: 'center',
+              borderRadius: '12px',
+              py: 2,
+              mb: 2.5,
+              bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.14 : 0.08),
+            }}
+          >
+            <Typography variant="overline" color="text.secondary">
+              Amount due
             </Typography>
-            <List dense sx={{ mb: 2 }}>
-              {basket.map((item) => (
-                <ListItem key={item.id} sx={{ py: 1, px: 0, borderRadius: 2, mb: 1, bgcolor: 'grey.50', boxShadow: 0, display: 'flex', alignItems: 'center' }}>
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="body1" fontWeight={700} noWrap>
-                      {item.name}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {item.category}
-                    </Typography>
-                  </Box>
-                  <Chip
-                    label={`x${item.quantity}`}
-                    color="primary"
-                    size="small"
-                    sx={{ fontWeight: 700, mx: 1 }}
-                  />
-                  <Typography variant="body2" fontWeight={700} color="primary.main" sx={{ minWidth: 80, textAlign: 'right' }}>
-                    ₱{(item.price * item.quantity).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                  </Typography>
-                </ListItem>
-              ))}
-            </List>
-            <Divider sx={{ my: 2 }} />
-            <TextField
-              fullWidth
-              autoFocus
-              label="Customer Money"
-              value={customerMoney}
-              onChange={(e) => setCustomerMoney(e.target.value.replace(/[^\d.]/g, ''))}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && isCustomerMoneyEnough) {
-                  void handleConfirmPayment();
-                }
-              }}
-              type="number"
-              placeholder="0.00"
-              error={customerMoney.trim() !== '' && !isCustomerMoneyEnough}
-              helperText={
-                customerMoney.trim() === ''
-                  ? 'Enter the amount received from the customer.'
-                  : isCustomerMoneyEnough
-                    ? 'Amount is enough to continue.'
-                    : `Need at least ₱${total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.`
+            <Typography variant="h3" component="p" color="primary.main" sx={{ lineHeight: 1.1 }}>
+              {formatPeso(total)}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {itemCount} item{itemCount !== 1 ? 's' : ''}
+            </Typography>
+          </Box>
+
+          <TextField
+            fullWidth
+            autoFocus
+            label="Cash received"
+            value={customerMoney}
+            onChange={(e) => setCustomerMoney(e.target.value.replace(/[^\d.]/g, ''))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && isCustomerMoneyEnough) {
+                void handleConfirmPayment();
               }
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    ₱
-                  </InputAdornment>
-                ),
-              }}
-              sx={{
-                mb: 2,
-                '& .MuiOutlinedInput-root': { borderRadius: 3 }
-              }}
+            }}
+            type="number"
+            placeholder="0.00"
+            error={customerMoney.trim() !== '' && !isCustomerMoneyEnough}
+            InputProps={{
+              startAdornment: <InputAdornment position="start">₱</InputAdornment>,
+              sx: { fontSize: '1.375rem', fontWeight: 700 },
+            }}
+          />
+
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1.5 }}>
+            <Chip
+              label="Exact"
+              variant="outlined"
+              onClick={() => setCustomerMoney((Math.round(total * 100) / 100).toString())}
             />
-            <Alert severity={isCustomerMoneyEnough ? 'success' : 'info'} sx={{ mb: 2, borderRadius: 3 }}>
-              {isCustomerMoneyEnough
-                ? 'Customer money is enough. You can now confirm the payment.'
-                : 'Customer money must be exact or more before you can proceed.'}
-            </Alert>
-            {/* Summary Section */}
-            <Box sx={{
+            {quickCashAmounts.map((amount) => (
+              <Chip
+                key={amount}
+                label={formatPeso(amount).replace('.00', '')}
+                variant="outlined"
+                onClick={() => setCustomerMoney(amount.toString())}
+              />
+            ))}
+          </Box>
+
+          <Box
+            sx={{
               display: 'flex',
-              flexDirection: 'column',
-              gap: 1.5,
-              mb: 2,
-              bgcolor: 'grey.100',
-              borderRadius: 3,
-              p: 2,
-              boxShadow: 0
-            }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="subtitle2">Total Amount</Typography>
-                <Chip label={`₱${total.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="secondary" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
+              justifyContent: 'space-between',
+              alignItems: 'baseline',
+              mt: 2.5,
+              pt: 2,
+              borderTop: 1,
+              borderColor: 'divider',
+            }}
+          >
+            <Typography fontWeight={600} color="text.secondary">
+              {hasValidCustomerMoney && !isCustomerMoneyEnough ? 'Short by' : 'Change'}
+            </Typography>
+            <Typography
+              variant="h4"
+              component="p"
+              color={hasValidCustomerMoney && !isCustomerMoneyEnough ? 'error.main' : 'success.main'}
+            >
+              {formatPeso(hasValidCustomerMoney && !isCustomerMoneyEnough ? total - parsedCustomerMoney : currentChange)}
+            </Typography>
+          </Box>
+
+          <Box sx={{ mt: 2, maxHeight: 180, overflowY: 'auto', borderRadius: '10px', border: 1, borderColor: 'divider' }}>
+            {basket.map((item) => (
+              <Box
+                key={item.id}
+                sx={{
+                  display: 'flex',
+                  gap: 1,
+                  px: 1.5,
+                  py: 1,
+                  '&:not(:last-of-type)': { borderBottom: 1, borderColor: 'divider' },
+                }}
+              >
+                <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                  {item.name}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  ×{item.quantity}
+                </Typography>
+                <Typography variant="body2" fontWeight={600} sx={{ minWidth: 84, textAlign: 'right' }}>
+                  {formatPeso(item.price * item.quantity)}
+                </Typography>
               </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="subtitle2">Customer Money</Typography>
-                <Chip
-                  label={
-                    hasValidCustomerMoney
-                      ? `₱${parsedCustomerMoney.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
-                      : 'Not entered'
-                  }
-                  color="info"
-                  sx={{ fontWeight: 700, fontSize: 16, px: 2 }}
-                />
-              </Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Typography variant="subtitle2">Change</Typography>
-                <Chip label={`₱${currentChange.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`} color="success" sx={{ fontWeight: 700, fontSize: 16, px: 2 }} />
-              </Box>
-            </Box>
+            ))}
           </Box>
         </DialogContent>
-        <DialogActions sx={{ px: 4, pb: 3, pt: 0, gap: 2, bgcolor: 'grey.50', borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}>
-          <Button 
-            variant="outlined" 
-            onClick={() => setShowPaymentSummary(false)}
-            sx={{ borderRadius: 3, fontWeight: 700, px: 4, py: 1.5 }}
-            color="inherit"
-          >
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setShowPaymentSummary(false)}>
             Cancel
           </Button>
-          <Button 
-            variant="contained" 
-            onClick={handleConfirmPayment}
-            disabled={!isCustomerMoneyEnough}
-            sx={{ borderRadius: 3, fontWeight: 700, px: 4, py: 1.5, boxShadow: 2 }}
-            color="primary"
-          >
-            Confirm Payment
+          <Button variant="contained" size="large" onClick={handleConfirmPayment} disabled={!isCustomerMoneyEnough}>
+            Confirm payment
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Print Confirmation Dialog */}
-      <Dialog 
-        open={showPrintDialog} 
-        onClose={() => setShowPrintDialog(false)}
-        maxWidth="xs"
-        fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 4,
-            boxShadow: 8,
-            overflow: 'hidden',
-            bgcolor: 'background.paper',
-          }
-        }}
-      >
-        {/* Gradient Header */}
-        <Box sx={{
-          p: 0,
-          m: 0,
-          background: 'linear-gradient(135deg, #4caf50 0%, #2e7d32 100%)',
-          color: 'white',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 2,
-          borderTopLeftRadius: 16,
-          borderTopRightRadius: 16,
-        }}>
-          <PrintIcon sx={{ fontSize: 36, ml: 3, my: 2 }} />
-          <Typography variant="h5" fontWeight={800} sx={{ py: 2 }}>
-            Print Receipt?
+      {/* Print Confirmation Dialog. The sale is already recorded here, so any way of
+          closing it must finish the sale and clear the basket. */}
+      <Dialog open={showPrintDialog} onClose={() => handlePrintConfirmation(false)} maxWidth="xs" fullWidth>
+        <DialogContent sx={{ textAlign: 'center', pt: 4 }}>
+          <CheckCircleIcon color="success" sx={{ fontSize: 56, mb: 1 }} />
+          <Typography variant="h6">Payment complete</Typography>
+          <Typography variant="overline" color="text.secondary" component="p" sx={{ mt: 2 }}>
+            Change due
           </Typography>
-        </Box>
-        <DialogContent sx={{ p: 4, textAlign: 'center' }}>
-          <Typography variant="h6" fontWeight={600} gutterBottom color="text.primary">
-            Payment Successful!
+          <Typography variant="h3" component="p" color="success.main" sx={{ lineHeight: 1.1 }}>
+            {formatPeso(paymentDetails?.change ?? 0)}
           </Typography>
-          <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-            Change due: ₱{paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Would you like to print a receipt for this transaction?
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+            Print a receipt for this sale?
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ px: 4, pb: 3, pt: 0, gap: 2, bgcolor: 'grey.50', borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}>
-          <Button 
-            variant="outlined" 
-            onClick={() => handlePrintConfirmation(false)}
-            sx={{ borderRadius: 3, fontWeight: 700, px: 4, py: 1.5, flex: 1 }}
-            color="inherit"
-          >
-            No, Don't Print
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button variant="outlined" color="inherit" onClick={() => handlePrintConfirmation(false)} sx={{ flex: 1 }}>
+            Skip
           </Button>
-          <Button 
-            variant="contained" 
+          <Button
+            variant="contained"
             onClick={() => handlePrintConfirmation(true)}
-            sx={{ borderRadius: 3, fontWeight: 700, px: 4, py: 1.5, boxShadow: 2, flex: 1 }}
-            color="primary"
             startIcon={<PrintIcon />}
+            sx={{ flex: 1 }}
           >
-            Yes, Print Receipt
+            Print receipt
           </Button>
         </DialogActions>
       </Dialog>
@@ -1736,4 +1410,4 @@ const Basket: React.FC = () => {
   );
 };
 
-export default Basket; 
+export default Basket;

@@ -589,7 +589,7 @@ const ManageProducts: React.FC = () => {
   };
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
+    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
       {/* Modern Header */}
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 3 }}>
@@ -645,7 +645,7 @@ const ManageProducts: React.FC = () => {
         {/* Statistics Cards */}
         <Grid container spacing={3} sx={{ mb: 4 }}>
           <Grid item xs={12} sm={6} md={3}>
-            <Paper sx={{ p: 3, borderRadius: 3, background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
+            <Paper sx={{ p: 3, borderRadius: 3, bgcolor: 'banner.main', color: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h3" fontWeight={700}>{products.length}</Typography>
@@ -656,7 +656,7 @@ const ManageProducts: React.FC = () => {
             </Paper>
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
-            <Paper sx={{ p: 3, borderRadius: 3, background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color: 'white' }}>
+            <Paper sx={{ p: 3, borderRadius: 3, background: '#be185d', color: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h3" fontWeight={700}>{categories.length}</Typography>
@@ -667,7 +667,7 @@ const ManageProducts: React.FC = () => {
             </Paper>
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
-            <Paper sx={{ p: 3, borderRadius: 3, background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', color: 'white' }}>
+            <Paper sx={{ p: 3, borderRadius: 3, background: '#0369a1', color: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h3" fontWeight={700}>{products.reduce((sum, p) => sum + p.quantity, 0)}</Typography>
@@ -678,7 +678,7 @@ const ManageProducts: React.FC = () => {
             </Paper>
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
-            <Paper sx={{ p: 3, borderRadius: 3, background: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)', color: 'white' }}>
+            <Paper sx={{ p: 3, borderRadius: 3, background: '#b45309', color: 'white' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <Box>
                   <Typography variant="h3" fontWeight={700}>{filteredProducts.length}</Typography>
@@ -1315,7 +1315,7 @@ const ManageProducts: React.FC = () => {
       >
         {/* Modern Header with Gradient */}
         <Box sx={{ 
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          bgcolor: 'banner.main',
           color: 'white',
           p: 3,
           position: 'relative'

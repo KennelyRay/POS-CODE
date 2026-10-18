@@ -917,7 +917,7 @@ const SalesRecord: React.FC = () => {
         }}
       >
         <Box sx={{ 
-          background: 'linear-gradient(135deg, #ef5350 0%, #f44336 100%)',
+          background: '#b91c1c',
           color: 'white',
           p: 3,
           position: 'relative'
@@ -985,7 +985,7 @@ const SalesRecord: React.FC = () => {
               flexDirection: 'column',
             }}>
               <Box sx={{
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                bgcolor: 'banner.main',
                 color: 'white',
                 p: 3,
                 display: 'flex',
@@ -1033,7 +1033,7 @@ const SalesRecord: React.FC = () => {
               flexDirection: 'column',
             }}>
               <Box sx={{
-                background: 'linear-gradient(135deg, #43cea2 0%, #185a9d 100%)',
+                background: '#0e7490',
                 color: 'white',
                 p: 3,
                 display: 'flex',
@@ -1069,7 +1069,7 @@ const SalesRecord: React.FC = () => {
               flexDirection: 'column',
             }}>
               <Box sx={{
-                background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                background: '#15803d',
                 color: 'white',
                 p: 3,
                 display: 'flex',

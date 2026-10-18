@@ -746,7 +746,7 @@ const Settings: React.FC = () => {
   ];
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: 3 }}>
+    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
       {/* Modern Header */}
       <Box sx={{ mb: 4 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -1490,7 +1490,7 @@ const Settings: React.FC = () => {
         <Box
           sx={{
             position: 'relative',
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            bgcolor: 'banner.main',
             color: 'white',
             p: 4,
             overflow: 'hidden'
@@ -1782,11 +1782,11 @@ const Settings: React.FC = () => {
               borderRadius: 3, 
               px: 4, 
               py: 1.5,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+              bgcolor: 'banner.main',
+              boxShadow: '0 4px 15px rgba(16, 24, 22, 0.4)',
               '&:hover': {
-                background: 'linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%)',
-                boxShadow: '0 6px 20px rgba(102, 126, 234, 0.6)',
+                bgcolor: 'banner.dark',
+                boxShadow: '0 6px 20px rgba(16, 24, 22, 0.6)',
               },
               '&:disabled': {
                 background: 'grey.300',
@@ -1817,7 +1817,7 @@ const Settings: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+            background: '#b91c1c',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -1921,10 +1921,10 @@ const Settings: React.FC = () => {
               borderRadius: 3, 
               px: 4, 
               py: 1.5,
-              background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+              background: '#b91c1c',
               boxShadow: '0 4px 15px rgba(255, 107, 107, 0.4)',
               '&:hover': {
-                background: 'linear-gradient(135deg, #ff5252 0%, #d84315 100%)',
+                background: '#991b1b',
                 boxShadow: '0 6px 20px rgba(255, 107, 107, 0.6)',
               }
             }}
@@ -1952,7 +1952,7 @@ const Settings: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            background: '#0369a1',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -2065,10 +2065,10 @@ const Settings: React.FC = () => {
                     startIcon={<UploadIcon />}
                     sx={{ 
                       borderRadius: 3,
-                      background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+                      background: '#0369a1',
                       boxShadow: '0 4px 15px rgba(79, 172, 254, 0.4)',
                       '&:hover': {
-                        background: 'linear-gradient(135deg, #3d8bfe 0%, #00d4fe 100%)',
+                        background: '#075985',
                         boxShadow: '0 6px 20px rgba(79, 172, 254, 0.6)',
                       }
                     }}
@@ -2127,7 +2127,7 @@ const Settings: React.FC = () => {
         {/* Header with gradient background */}
         <Box
           sx={{
-            background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+            background: '#b91c1c',
             color: 'white',
             p: 4,
             position: 'relative',
@@ -2290,10 +2290,10 @@ const Settings: React.FC = () => {
               borderRadius: 3, 
               px: 4, 
               py: 1.5,
-              background: 'linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%)',
+              background: '#b91c1c',
               boxShadow: '0 4px 15px rgba(255, 107, 107, 0.4)',
               '&:hover': {
-                background: 'linear-gradient(135deg, #ff5252 0%, #d84315 100%)',
+                background: '#991b1b',
                 boxShadow: '0 6px 20px rgba(255, 107, 107, 0.6)',
               }
             }}
