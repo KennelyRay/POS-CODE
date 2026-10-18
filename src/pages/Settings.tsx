@@ -124,6 +124,7 @@ const Settings: React.FC = () => {
     storeAddress: storeSettings.storeAddress,
     phoneNumber: storeSettings.phoneNumber || '',
     email: storeSettings.email || '',
+    birNumber: storeSettings.birNumber || '',
   });
   const [clearDataDialog, setClearDataDialog] = useState(false);
   const [importDialog, setImportDialog] = useState(false);
@@ -192,6 +193,7 @@ const Settings: React.FC = () => {
     storeSettings.setStoreAddress(storeForm.storeAddress);
     storeSettings.setPhoneNumber?.(storeForm.phoneNumber);
     storeSettings.setEmail?.(storeForm.email);
+    storeSettings.setBirNumber?.(storeForm.birNumber);
     setSnackbar({ open: true, message: 'Store settings saved successfully!', severity: 'success' });
   };
 
@@ -509,6 +511,7 @@ const Settings: React.FC = () => {
         storeAddress: storeSettings.storeAddress,
         phoneNumber: storeSettings.phoneNumber,
         email: storeSettings.email,
+        birNumber: storeSettings.birNumber,
         theme: themeName,
       },
       timestamp: new Date().toISOString(),
@@ -544,6 +547,7 @@ const Settings: React.FC = () => {
           if (data.settings.storeAddress) storeSettings.setStoreAddress(data.settings.storeAddress);
           if (data.settings.phoneNumber) storeSettings.setPhoneNumber?.(data.settings.phoneNumber);
           if (data.settings.email) storeSettings.setEmail?.(data.settings.email);
+          if (data.settings.birNumber) storeSettings.setBirNumber?.(data.settings.birNumber);
           if (data.settings.theme) setThemeName(data.settings.theme);
         }
 
@@ -934,6 +938,22 @@ const Settings: React.FC = () => {
                             startAdornment: (
                               <InputAdornment position="start">
                                 <EmailIcon color="action" />
+                              </InputAdornment>
+                            ),
+                          }}
+                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          label="BIR No."
+                          value={storeForm.birNumber}
+                          onChange={(e) => setStoreForm({ ...storeForm, birNumber: e.target.value })}
+                          InputProps={{
+                            startAdornment: (
+                              <InputAdornment position="start">
+                                <ReceiptIcon color="action" />
                               </InputAdornment>
                             ),
                           }}

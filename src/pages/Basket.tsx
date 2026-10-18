@@ -927,6 +927,7 @@ const Basket: React.FC = () => {
       change: currentPaymentDetails.change,
       storeName: storeSettings.storeName,
       storeAddress: storeSettings.storeAddress,
+      birNumber: storeSettings.birNumber,
       qrData,
     };
 

@@ -61,11 +61,13 @@ export const StoreSettingsContext = createContext({
   storeAddress: '123 Main Street',
   phoneNumber: '',
   email: '',
+  birNumber: '',
   setStoreName: (name: string) => {},
   setStoreAddress: (address: string) => {},
   setPhoneNumber: (phone: string) => {},
   setEmail: (email: string) => {},
-  updateStoreSettings: (settings: { storeName?: string; storeAddress?: string; phoneNumber?: string; email?: string }) => {},
+  setBirNumber: (bir: string) => {},
+  updateStoreSettings: (settings: { storeName?: string; storeAddress?: string; phoneNumber?: string; email?: string; birNumber?: string }) => {},
 });
 
 // 5. Gross Sales context for tracking financial data
@@ -292,10 +294,11 @@ function App() {
       storeAddress: '123 Main Street',
       phoneNumber: '',
       email: '',
+      birNumber: '',
     };
   });
 
-  const updateStoreSettings = (settings: { storeName?: string; storeAddress?: string; phoneNumber?: string; email?: string }) => {
+  const updateStoreSettings = (settings: { storeName?: string; storeAddress?: string; phoneNumber?: string; email?: string; birNumber?: string }) => {
     setStoreSettings((prev: typeof storeSettings) => {
       const newSettings = { ...prev, ...settings };
       localStorage.setItem('pos_store_settings', JSON.stringify(newSettings));
@@ -318,6 +321,10 @@ function App() {
 
   const setEmail = (email: string) => {
     updateStoreSettings({ email });
+  };
+
+  const setBirNumber = (birNumber: string) => {
+    updateStoreSettings({ birNumber });
   };
 
   // Sales/Receipts state with local storage
@@ -677,7 +684,8 @@ function App() {
         setStoreAddress,
         setPhoneNumber,
         setEmail,
-        updateStoreSettings 
+        setBirNumber,
+        updateStoreSettings
       }}>
         <ProductsContext.Provider value={{ 
           products, 

@@ -97,6 +97,14 @@ class XP58DirectUSB:
     def set_bold_off(self) -> bool:
         """Turn off bold text"""
         return self.send_data(b'\x1B\x45\x00')  # ESC E 0 - Bold off
+
+    def set_size_double(self) -> bool:
+        """Set double width and height text (bigger font)"""
+        return self.send_data(b'\x1D\x21\x11')  # GS ! 0x11 - Double width & height
+
+    def set_size_normal(self) -> bool:
+        """Reset text to normal size"""
+        return self.send_data(b'\x1D\x21\x00')  # GS ! 0x00 - Normal size
     
     def print_qr_code(self, data: str) -> bool:
         """Print a native ESC/POS QR code"""
@@ -137,6 +145,7 @@ class XP58DirectUSB:
             # Parse data
             store_name = receipt_data.get('storeName', 'Ken-dal Store')
             store_address = receipt_data.get('storeAddress', '#6024 Purok 6 Kias Baguio City')
+            bir_number = str(receipt_data.get('birNumber', '') or '').strip()
             receipt_id = receipt_data.get('id', 'N/A')
             date = receipt_data.get('date', datetime.now().isoformat())
             items = receipt_data.get('items', [])
@@ -154,9 +163,14 @@ class XP58DirectUSB:
             
             # Header
             self.set_align_center()
+            # Store name - bold and larger font
             self.set_bold_on()
+            self.set_size_double()
             self.send_text(f"{store_name}\n")
+            self.set_size_normal()
             self.send_text(f"{store_address}\n")
+            if bir_number:
+                self.send_text(f"BIR No: {bir_number}\n")
             self.set_bold_off()
             self.send_text("-" * 32 + "\n")
             self.send_text("SALES RECEIPT\n")
@@ -222,6 +236,7 @@ class XP58DirectUSB:
         test_receipt = {
             'storeName': 'Ken-dal Store POS',
             'storeAddress': '#6024 Purok 6 Kias Baguio City',
+            'birNumber': '123-456-789-000',
             'id': f'TEST-{datetime.now().strftime("%Y%m%d-%H%M%S")}',
             'date': datetime.now().isoformat(),
             'items': [

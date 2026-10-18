@@ -1,6 +1,6 @@
 {
   "name": "pos-system",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "private": true,
   "description": "Point of Sale System for KKK-A",
   "author": "KKK-A",
@@ -70,6 +70,9 @@
   "build": {
     "appId": "com.kendalstore.pos",
     "productName": "Ken-dal Store POS",
+    "extraMetadata": {
+      "main": "public/electron.js"
+    },
     "files": [
       "build/**/*",
       "public/electron.js",
@@ -121,7 +124,7 @@
     ],
     "directories": {
       "buildResources": "assets",
-      "output": "dist-electron-1.21.0-installer"
+      "output": "dist-electron-1.22.0-installer"
     },
     "win": {
       "target": "nsis",

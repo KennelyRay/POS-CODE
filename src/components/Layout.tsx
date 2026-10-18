@@ -112,7 +112,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       </List>
       <Box sx={{ p: 2, textAlign: 'center' }}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-          Version 1.21.0 (Updated 2026-07-01)
+          Version 1.22.0 (Updated 2026-07-01)
         </Typography>
         <Typography variant="caption" color="text.secondary">
           Coded by Ken

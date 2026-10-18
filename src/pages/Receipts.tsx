@@ -292,6 +292,7 @@ const Receipts: React.FC = () => {
         ...selectedReceipt,
         storeName: storeSettings?.storeName || 'Ken-dal Store',
         storeAddress: storeSettings?.storeAddress || '123 Main Street, City',
+        birNumber: storeSettings?.birNumber || '',
         qrData: getReceiptQrData(selectedReceipt),
       };
       
@@ -330,6 +331,7 @@ const Receipts: React.FC = () => {
         ...receipt,
         storeName: storeSettings?.storeName || 'Ken-dal Store',
         storeAddress: storeSettings?.storeAddress || '123 Main Street, City',
+        birNumber: storeSettings?.birNumber || '',
         qrData: getReceiptQrData(receipt),
       };
       
