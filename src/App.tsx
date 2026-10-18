@@ -44,6 +44,7 @@ export const SalesContext = createContext<{
   addSale: (sale: SaleRecord) => void;
   addReceipt: (receipt: ReceiptRecord) => void;
   deleteReceipt: (id: string) => void;
+  deleteReceipts: (ids: string[]) => void;
   setSales: (sales: SaleRecord[]) => void;
   setReceipts: (receipts: ReceiptRecord[]) => void;
 }>({
@@ -52,6 +53,7 @@ export const SalesContext = createContext<{
   addSale: () => {},
   addReceipt: () => {},
   deleteReceipt: () => {},
+  deleteReceipts: () => {},
   setSales: () => {},
   setReceipts: () => {},
 });
@@ -380,6 +382,16 @@ function App() {
     });
   };
 
+  // One state update and one localStorage write, however many receipts are removed
+  const deleteReceipts = (ids: string[]) => {
+    const toDelete = new Set(ids);
+    setReceipts(prev => {
+      const newReceipts = prev.filter(receipt => !toDelete.has(receipt.id));
+      localStorage.setItem('pos_receipts', JSON.stringify(newReceipts));
+      return newReceipts;
+    });
+  };
+
   // Products and Categories state with local storage
   const [products, setProducts] = useState<Product[]>(() => {
     try {
@@ -595,7 +607,7 @@ function App() {
           exportProducts,
           importProducts
         }}>
-          <SalesContext.Provider value={{ sales, receipts, addSale, addReceipt, deleteReceipt, setSales, setReceipts }}>
+          <SalesContext.Provider value={{ sales, receipts, addSale, addReceipt, deleteReceipt, deleteReceipts, setSales, setReceipts }}>
             <GrossSalesContext.Provider value={{ 
               grossSalesData,
               dailySalesData,
@@ -605,7 +617,7 @@ function App() {
             }}>
               <PrinterProvider>
                 <ThemeProvider theme={theme}>
-                  <CssBaseline />
+                  <CssBaseline enableColorScheme />
                   <BasketProvider>
                     <Router>
                       <Routes>
