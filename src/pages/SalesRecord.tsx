@@ -1,59 +1,43 @@
-import React, { useEffect, useMemo, useState, useContext } from 'react';
+import React, { useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Grid,
-  Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Box,
-  Card,
-  CardContent,
-  TextField,
-  Snackbar,
   Alert,
-  IconButton,
-  Paper,
-  MenuItem,
-  Select,
-  FormControl,
-  InputLabel,
+  Box,
   Button,
-  Dialog,
-  DialogContent,
-  DialogActions,
-  Avatar,
-  Tabs,
-  Tab,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  Card,
   Checkbox,
-  Stack,
   Chip,
+  Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  IconButton,
+  InputAdornment,
+  Snackbar,
+  Tab,
+  Tabs,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Typography,
 } from '@mui/material';
+import { alpha, styled } from '@mui/material/styles';
 import {
-  Assessment as AssessmentIcon,
-  Store as StoreIcon,
-  ShoppingCart as ShoppingCartIcon,
-  LocalAtm as LoadIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  FileDownload as FileDownloadIcon,
-  Clear as ClearIcon,
-  AccountBalanceWallet as CashierIcon,
-  QrCode as GcashIcon,
-  History as HistoryIcon,
+  Close as CloseIcon,
+  DeleteOutline as DeleteIcon,
   ExpandMore as ExpandMoreIcon,
+  FileDownloadOutlined as FileDownloadIcon,
+  History as HistoryIcon,
+  Inventory2Outlined as PurchaseIcon,
+  PaymentsOutlined as CashIcon,
+  PhoneAndroid as LoadIcon,
+  PointOfSale as SalesIcon,
+  Search as SearchIcon,
 } from '@mui/icons-material';
 import { GrossSalesContext, SaleRecord, SalesContext } from '../App';
-import { useTheme } from '@mui/material/styles';
 import { saveAs } from 'file-saver';
 import ExcelJS from 'exceljs';
-
-type SalesCol = 'general' | 'store-cashier' | 'store-gcash' | 'globe' | 'smart';
 
 type ClearedSalesBatch = {
   id: string;
@@ -62,26 +46,513 @@ type ClearedSalesBatch = {
   sales: SaleRecord[];
 };
 
+type EntryKind = 'sale' | 'unlisted' | 'purchase' | 'load';
+type Filter = 'all' | 'general' | 'store' | 'load';
+
 const CLEARED_SALES_HISTORY_KEY = 'pos_cleared_sales_history';
+const UNLISTED_NAME = 'Unlisted Sales';
+const PAGE_SIZE = 60;
 
-// Add type guard for load network
-function isLoadNetwork(col: SalesCol): col is 'globe' | 'smart' {
-  return col === 'globe' || col === 'smart';
-}
+const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+const pad = (value: number) => String(value).padStart(2, '0');
+const dayKeyOf = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-// Add type guard for store purchase
-function isStorePurchase(col: SalesCol): col is 'store-cashier' | 'store-gcash' {
-  return col === 'store-cashier' || col === 'store-gcash';
-}
+const dayLabel = (dayKey: string) => {
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  const today = new Date();
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const full = date.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  if (date.toDateString() === today.toDateString()) return `Today · ${full}`;
+  if (date.toDateString() === yesterday.toDateString()) return `Yesterday · ${full}`;
+  return full;
+};
+
+const loadNetworkOf = (sale: SaleRecord): 'Globe' | 'Smart' | null => {
+  const name = (sale.items[0]?.name ?? '').toLowerCase();
+  if (name.includes('globe')) return 'Globe';
+  if (name.includes('smart')) return 'Smart';
+  return null;
+};
+
+const describeSale = (sale: SaleRecord) => {
+  const items = sale.items;
+  if (items.length <= 1) return items[0]?.name ?? '—';
+  const shown = items.slice(0, 3).map((item) => (item.quantity > 1 ? `${item.name} ×${item.quantity}` : item.name));
+  return items.length > 3 ? `${shown.join(', ')} +${items.length - 3} more` : shown.join(', ');
+};
+
+const typeLabel = (sale: SaleRecord) => {
+  if (sale.type === 'store') return sale.paymentMethod === 'gcash' ? 'Purchase · GCash' : 'Purchase · Cashier';
+  if (sale.type === 'load') return `Load · ${loadNetworkOf(sale) ?? 'Other'}`;
+  if (sale.items.length === 1 && sale.items[0].name === UNLISTED_NAME) return 'Unlisted sale';
+  if (sale.items.length > 1) return `Checkout · ${sale.items.length} items`;
+  return 'Sale';
+};
+
+// The same figures the old page showed: "Net cash" is general sales minus purchases
+// paid from the cashier, which is what the General Sales table used to total.
+const summarize = (sales: SaleRecord[]) => {
+  const s = { general: 0, generalCount: 0, cashier: 0, gcash: 0, purchaseCount: 0, globe: 0, smart: 0, load: 0, loadCount: 0 };
+  for (const sale of sales) {
+    if (sale.type === 'general') {
+      s.general += sale.total;
+      s.generalCount += 1;
+    } else if (sale.type === 'store') {
+      s.purchaseCount += 1;
+      if (sale.paymentMethod === 'cashier') s.cashier += sale.total;
+      else if (sale.paymentMethod === 'gcash') s.gcash += sale.total;
+    } else if (sale.type === 'load') {
+      s.load += sale.total;
+      s.loadCount += 1;
+      const network = loadNetworkOf(sale);
+      if (network === 'Globe') s.globe += sale.total;
+      else if (network === 'Smart') s.smart += sale.total;
+    }
+  }
+  return { ...s, purchases: s.cashier + s.gcash, netCash: s.general - s.cashier };
+};
+
+type Summary = ReturnType<typeof summarize>;
+
+const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: number; caption: string; negative?: boolean }> = ({
+  icon,
+  label,
+  value,
+  caption,
+  negative,
+}) => (
+  <Card sx={{ p: 2, display: 'flex', gap: 1.5, alignItems: 'flex-start', minWidth: 0 }}>
+    <Box
+      sx={{
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: '10px',
+        display: 'grid',
+        placeItems: 'center',
+        color: 'primary.main',
+        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+      }}
+    >
+      {icon}
+    </Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="body2" color="text.secondary" fontWeight={600}>
+        {label}
+      </Typography>
+      <Typography variant="h5" component="p" color={negative ? 'error.main' : 'text.primary'} sx={{ lineHeight: 1.3 }}>
+        {formatPeso(value)}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" component="p" noWrap title={caption}>
+        {caption}
+      </Typography>
+    </Box>
+  </Card>
+);
+
+const SummaryTiles: React.FC<{ summary: Summary }> = ({ summary }) => (
+  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5 }}>
+    <StatTile
+      icon={<SalesIcon />}
+      label="Sales"
+      value={summary.general}
+      caption={`${summary.generalCount} transaction${summary.generalCount !== 1 ? 's' : ''}`}
+    />
+    <StatTile
+      icon={<PurchaseIcon />}
+      label="Store purchases"
+      value={summary.purchases}
+      caption={`Cashier ${formatPeso(summary.cashier)} · GCash ${formatPeso(summary.gcash)}`}
+    />
+    <StatTile
+      icon={<CashIcon />}
+      label="Net cash"
+      value={summary.netCash}
+      negative={summary.netCash < 0}
+      caption="Sales minus cashier-paid purchases"
+    />
+    <StatTile
+      icon={<LoadIcon />}
+      label="Load sales"
+      value={summary.load}
+      caption={`Globe ${formatPeso(summary.globe)} · Smart ${formatPeso(summary.smart)}`}
+    />
+  </Box>
+);
+
+const entryButtonLabel: Record<EntryKind, string> = {
+  sale: 'Add sale',
+  unlisted: 'Add unlisted sale',
+  purchase: 'Add purchase',
+  load: 'Add load sale',
+};
+
+const EntryForm: React.FC<{ onAdd: (sale: SaleRecord, label: string) => void }> = ({ onAdd }) => {
+  const [kind, setKind] = useState<EntryKind>('sale');
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [payment, setPayment] = useState<'cashier' | 'gcash'>('cashier');
+  const [network, setNetwork] = useState<'globe' | 'smart'>('globe');
+  const [error, setError] = useState<{ name?: string; amount?: string }>({});
+  const firstFieldRef = useRef<HTMLInputElement | null>(null);
+
+  const needsName = kind === 'sale' || kind === 'purchase';
+
+  useEffect(() => {
+    setError({});
+    firstFieldRef.current?.focus();
+  }, [kind]);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const price = Number(amount);
+    const nextError: typeof error = {};
+    if (needsName && !name.trim()) nextError.name = 'Enter a description';
+    if (!amount || !Number.isFinite(price) || price <= 0) nextError.amount = 'Enter an amount above zero';
+    setError(nextError);
+    if (nextError.name || nextError.amount) return;
+
+    const base = { id: Date.now().toString(), date: new Date(), total: price };
+    let sale: SaleRecord;
+    if (kind === 'sale') {
+      sale = { ...base, items: [{ name: name.trim(), quantity: 1, price }], type: 'general' };
+    } else if (kind === 'unlisted') {
+      sale = { ...base, items: [{ name: UNLISTED_NAME, quantity: 1, price }], type: 'general' };
+    } else if (kind === 'purchase') {
+      sale = { ...base, items: [{ name: name.trim(), quantity: 1, price }], type: 'store', paymentMethod: payment };
+    } else {
+      const label = network === 'globe' ? 'Globe' : 'Smart';
+      sale = { ...base, items: [{ name: `Load (${label})`, quantity: 1, price }], type: 'load' };
+    }
+    onAdd(sale, `${typeLabel(sale)} · ${formatPeso(price)}`);
+    setName('');
+    setAmount('');
+    firstFieldRef.current?.focus();
+  };
+
+  return (
+    <Card sx={{ p: 2 }}>
+      <Typography variant="h6" sx={{ mb: 1.5 }}>
+        Add entry
+      </Typography>
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        size="small"
+        color="primary"
+        value={kind}
+        onChange={(_, value: EntryKind | null) => value && setKind(value)}
+        sx={{ mb: 2, '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, py: 0.75 } }}
+      >
+        <ToggleButton value="sale">Sale</ToggleButton>
+        <ToggleButton value="unlisted">Unlisted</ToggleButton>
+        <ToggleButton value="purchase">Purchase</ToggleButton>
+        <ToggleButton value="load">Load</ToggleButton>
+      </ToggleButtonGroup>
+
+      <Box component="form" onSubmit={submit} noValidate sx={{ display: 'grid', gap: 1.5 }}>
+        {kind === 'load' && (
+          <ToggleButtonGroup
+            exclusive
+            fullWidth
+            size="small"
+            color="primary"
+            value={network}
+            onChange={(_, value) => value && setNetwork(value)}
+            sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600 } }}
+          >
+            <ToggleButton value="globe">Globe</ToggleButton>
+            <ToggleButton value="smart">Smart</ToggleButton>
+          </ToggleButtonGroup>
+        )}
+        {needsName && (
+          <TextField
+            inputRef={firstFieldRef}
+            label={kind === 'purchase' ? 'What was bought' : 'Item or description'}
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setError((prev) => ({ ...prev, name: undefined }));
+            }}
+            error={Boolean(error.name)}
+            helperText={error.name}
+            autoComplete="off"
+          />
+        )}
+        <TextField
+          inputRef={needsName ? undefined : firstFieldRef}
+          label="Amount"
+          value={amount}
+          onChange={(e) => {
+            setAmount(e.target.value);
+            setError((prev) => ({ ...prev, amount: undefined }));
+          }}
+          type="number"
+          error={Boolean(error.amount)}
+          helperText={error.amount ?? (kind === 'unlisted' ? `Recorded as “${UNLISTED_NAME}”` : undefined)}
+          inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+          InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+        />
+        {kind === 'purchase' && (
+          <Box>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              size="small"
+              color="primary"
+              value={payment}
+              onChange={(_, value) => value && setPayment(value)}
+              sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600 } }}
+            >
+              <ToggleButton value="cashier">Paid from cashier</ToggleButton>
+              <ToggleButton value="gcash">Paid by GCash</ToggleButton>
+            </ToggleButtonGroup>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+              {payment === 'cashier' ? 'Cashier purchases are subtracted from Net cash.' : 'GCash purchases don’t affect Net cash.'}
+            </Typography>
+          </Box>
+        )}
+        <Button type="submit" variant="contained" size="large">
+          {entryButtonLabel[kind]}
+        </Button>
+      </Box>
+    </Card>
+  );
+};
+
+// Plain elements styled by one shared class, so long lists stay light.
+const RowRoot = styled('div')(({ theme }) => ({
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr) auto 36px',
+  alignItems: 'center',
+  columnGap: theme.spacing(1.5),
+  padding: theme.spacing(1, 1, 1, 2),
+  borderBottom: `1px solid ${theme.palette.divider}`,
+  '&:hover': { backgroundColor: theme.palette.action.hover },
+  '& .row-time': { ...theme.typography.body2, color: theme.palette.text.secondary, display: 'none' },
+  '& .row-main': { minWidth: 0 },
+  '& .row-title, & .row-meta': { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  '& .row-title': { ...theme.typography.body2, fontWeight: 600 },
+  '& .row-meta': { ...theme.typography.caption, color: theme.palette.text.secondary },
+  '& .row-amount': { ...theme.typography.body1, fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' },
+  '& .row-amount[data-out="true"]': { color: theme.palette.text.secondary },
+  '& .row-delete': {
+    display: 'grid',
+    placeItems: 'center',
+    width: 34,
+    height: 34,
+    padding: 0,
+    border: 0,
+    borderRadius: 10,
+    background: 'transparent',
+    color: theme.palette.action.active,
+    cursor: 'pointer',
+    '&:hover': { backgroundColor: theme.palette.action.hover, color: theme.palette.error.main },
+    '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}` },
+  },
+  [theme.breakpoints.up('md')]: {
+    gridTemplateColumns: '76px minmax(0, 1fr) auto 36px',
+    '& .row-time': { display: 'block' },
+    '& .row-time-inline': { display: 'none' },
+  },
+}));
+
+const SaleRow = React.memo(function SaleRow({ sale, onDelete }: { sale: SaleRecord; onDelete?: (sale: SaleRecord) => void }) {
+  const time = new Date(sale.date).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
+  const isPurchase = sale.type === 'store';
+  return (
+    <RowRoot>
+      <span className="row-time">{time}</span>
+      <div className="row-main">
+        <p className="row-title" title={sale.items.map((i) => `${i.name} ×${i.quantity}`).join(', ')}>
+          {describeSale(sale)}
+        </p>
+        <p className="row-meta">
+          <span className="row-time-inline">{time} · </span>
+          {typeLabel(sale)}
+        </p>
+      </div>
+      <span className="row-amount" data-out={isPurchase}>
+        {isPurchase ? `−${formatPeso(sale.total)}` : formatPeso(sale.total)}
+      </span>
+      {onDelete ? (
+        <button type="button" className="row-delete" title="Delete" aria-label={`Delete ${describeSale(sale)}`} onClick={() => onDelete(sale)}>
+          <DeleteIcon fontSize="small" />
+        </button>
+      ) : (
+        <span />
+      )}
+    </RowRoot>
+  );
+});
+
+const DayHeader: React.FC<{ dayKey: string; count: number; total: number; sticky?: boolean }> = ({ dayKey, count, total, sticky }) => (
+  <Box
+    sx={{
+      position: sticky ? 'sticky' : 'static',
+      top: 64,
+      zIndex: 1,
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      gap: 2,
+      px: 2,
+      py: 1,
+      bgcolor: 'background.default',
+      borderBottom: 1,
+      borderColor: 'divider',
+    }}
+  >
+    <Typography variant="subtitle2">{dayLabel(dayKey)}</Typography>
+    <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+      {count} entr{count !== 1 ? 'ies' : 'y'} · sales <strong>{formatPeso(total)}</strong>
+    </Typography>
+  </Box>
+);
+
+// Newest first with a header wherever the day changes; renders `limit` rows.
+const SalesList: React.FC<{
+  sales: SaleRecord[];
+  limit: number;
+  onDelete?: (sale: SaleRecord) => void;
+  stickyHeaders?: boolean;
+}> = ({ sales, limit, onDelete, stickyHeaders }) => {
+  const dayTotals = useMemo(() => {
+    const map = new Map<string, { count: number; total: number }>();
+    for (const sale of sales) {
+      const key = dayKeyOf(new Date(sale.date));
+      const entry = map.get(key) ?? { count: 0, total: 0 };
+      entry.count += 1;
+      if (sale.type === 'general') entry.total += sale.total;
+      map.set(key, entry);
+    }
+    return map;
+  }, [sales]);
+
+  const rows: React.ReactNode[] = [];
+  let currentDay = '';
+  for (const sale of sales.slice(0, limit)) {
+    const key = dayKeyOf(new Date(sale.date));
+    if (key !== currentDay) {
+      currentDay = key;
+      const totals = dayTotals.get(key) ?? { count: 0, total: 0 };
+      rows.push(<DayHeader key={`day-${key}`} dayKey={key} count={totals.count} total={totals.total} sticky={stickyHeaders} />);
+    }
+    rows.push(<SaleRow key={sale.id} sale={sale} onDelete={onDelete} />);
+  }
+  return <>{rows}</>;
+};
+
+const sortNewestFirst = (sales: SaleRecord[]) =>
+  [...sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.id.localeCompare(a.id));
+
+const HistoryBatch: React.FC<{
+  batch: ClearedSalesBatch;
+  selected: boolean;
+  onToggle: (id: string) => void;
+  onDelete: (batch: ClearedSalesBatch) => void;
+}> = ({ batch, selected, onToggle, onDelete }) => {
+  const [open, setOpen] = useState(false);
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const summary = useMemo(() => summarize(batch.sales), [batch.sales]);
+  const sorted = useMemo(() => (open ? sortNewestFirst(batch.sales) : []), [open, batch.sales]);
+  const clearedAt = new Date(batch.clearedAt);
+
+  return (
+    <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '40px minmax(0, 1fr) auto', sm: '40px minmax(0, 1fr) auto auto' },
+          alignItems: 'center',
+          columnGap: 1.5,
+          px: 1,
+          py: 1,
+          cursor: 'pointer',
+          bgcolor: selected ? (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.14 : 0.07) : 'transparent',
+          '&:hover': { bgcolor: 'action.hover' },
+        }}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Checkbox
+          size="small"
+          checked={selected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => onToggle(batch.id)}
+          inputProps={{ 'aria-label': `Select record from ${clearedAt.toLocaleString()}` }}
+        />
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" fontWeight={600} noWrap>
+            {clearedAt.toLocaleString('en-PH', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap component="p">
+            {batch.reason === 'clear-all' ? 'Cleared' : 'Exported & cleared'} · {batch.sales.length} entr{batch.sales.length !== 1 ? 'ies' : 'y'}
+          </Typography>
+        </Box>
+        <Box sx={{ textAlign: 'right', display: { xs: 'none', sm: 'block' } }}>
+          <Typography fontWeight={700}>{formatPeso(summary.general)}</Typography>
+          <Typography variant="caption" color="text.secondary">
+            sales
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+          <IconButton
+            size="small"
+            aria-label="Delete this record"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(batch);
+            }}
+          >
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+          <ExpandMoreIcon sx={{ color: 'action.active', transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'none' }} />
+        </Box>
+      </Box>
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ px: 2, pb: 2, pt: 1, bgcolor: 'background.default' }}>
+          <SummaryTiles summary={summary} />
+          <Card sx={{ mt: 1.5 }}>
+            {sorted.length === 0 ? (
+              <Typography color="text.secondary" sx={{ p: 2 }}>
+                No entries in this record.
+              </Typography>
+            ) : (
+              <>
+                <SalesList sales={sorted} limit={limit} />
+                {limit < sorted.length && (
+                  <Box sx={{ textAlign: 'center', py: 1 }}>
+                    <Button onClick={() => setLimit((value) => value + PAGE_SIZE)}>
+                      Show more ({sorted.length - limit} remaining)
+                    </Button>
+                  </Box>
+                )}
+              </>
+            )}
+          </Card>
+        </Box>
+      </Collapse>
+    </Box>
+  );
+};
+
+type Toast = { open: boolean; message: string; severity: 'success' | 'info' | 'error'; undo?: () => void };
 
 const SalesRecord: React.FC = () => {
   const salesContext = useContext(SalesContext);
   const grossSalesContext = useContext(GrossSalesContext);
   const sales = salesContext.sales;
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' }>({ open: false, message: '', severity: 'success' });
-  const theme = useTheme();
-  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [snackbar, setSnackbar] = useState<Toast>({ open: false, message: '', severity: 'success' });
   const [activeTab, setActiveTab] = useState(0);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [clearAfterExport, setClearAfterExport] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [historyToDelete, setHistoryToDelete] = useState<string[] | null>(null);
 
   const [clearedSalesHistory, setClearedSalesHistory] = useState<ClearedSalesBatch[]>(() => {
     const stored = localStorage.getItem(CLEARED_SALES_HISTORY_KEY);
@@ -92,12 +563,94 @@ const SalesRecord: React.FC = () => {
       return [];
     }
   });
-
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
 
   useEffect(() => {
     localStorage.setItem(CLEARED_SALES_HISTORY_KEY, JSON.stringify(clearedSalesHistory));
   }, [clearedSalesHistory]);
+
+  const persistSales = useCallback(
+    (next: SaleRecord[]) => {
+      salesContext.setSales(next);
+      localStorage.setItem('pos_sales', JSON.stringify(next));
+    },
+    [salesContext]
+  );
+
+  const summary = useMemo(() => summarize(sales), [sales]);
+  const sortedSales = useMemo(() => sortNewestFirst(sales), [sales]);
+
+  const counts = useMemo(() => {
+    const c = { all: sales.length, general: 0, store: 0, load: 0 };
+    for (const sale of sales) c[sale.type] += 1;
+    return c;
+  }, [sales]);
+
+  const deferredSearch = useDeferredValue(searchQuery);
+  const normalizedSearch = deferredSearch.trim().toLowerCase();
+  const filteredSales = useMemo(
+    () =>
+      sortedSales.filter(
+        (sale) =>
+          (filter === 'all' || sale.type === filter) &&
+          (!normalizedSearch || sale.items.some((item) => item.name.toLowerCase().includes(normalizedSearch)))
+      ),
+    [filter, normalizedSearch, sortedSales]
+  );
+
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [filter, normalizedSearch]);
+
+  const hasMore = visibleCount < filteredSales.length;
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setVisibleCount((count) => count + PAGE_SIZE);
+      },
+      { rootMargin: '600px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, visibleCount]);
+
+  const oldestSaleDate = sortedSales.length ? new Date(sortedSales[sortedSales.length - 1].date) : null;
+
+  const handleAdd = useCallback(
+    (sale: SaleRecord, label: string) => {
+      salesContext.addSale(sale);
+      setSnackbar({
+        open: true,
+        message: `Added ${label}`,
+        severity: 'success',
+        undo: () => persistSales(JSON.parse(localStorage.getItem('pos_sales') || '[]').filter((s: SaleRecord) => s.id !== sale.id)),
+      });
+    },
+    [persistSales, salesContext]
+  );
+
+  const handleDeleteSale = useCallback(
+    (sale: SaleRecord) => {
+      const index = sales.findIndex((s) => s.id === sale.id);
+      if (index < 0) return;
+      persistSales(sales.filter((s) => s.id !== sale.id));
+      setSnackbar({
+        open: true,
+        message: `Deleted ${describeSale(sale)}`,
+        severity: 'info',
+        undo: () => {
+          const current: SaleRecord[] = JSON.parse(localStorage.getItem('pos_sales') || '[]');
+          const restored = [...current];
+          restored.splice(Math.min(index, restored.length), 0, sale);
+          persistSales(restored);
+        },
+      });
+    },
+    [persistSales, sales]
+  );
 
   const addToClearedHistory = (batchSales: SaleRecord[], reason: ClearedSalesBatch['reason']) => {
     if (!batchSales.length) return;
@@ -110,151 +663,16 @@ const SalesRecord: React.FC = () => {
     setClearedSalesHistory((prev) => [entry, ...prev]);
   };
 
-  const deleteClearedHistory = (idsToDelete: string[]) => {
-    if (!idsToDelete.length) return;
-    setClearedSalesHistory((prev) => prev.filter((h) => !idsToDelete.includes(h.id)));
-    setSelectedHistoryIds((prev) => prev.filter((id) => !idsToDelete.includes(id)));
-    setSnackbar({ open: true, message: 'History deleted successfully', severity: 'success' });
+  const clearCurrentSales = (reason: ClearedSalesBatch['reason']) => {
+    addToClearedHistory(sales, reason);
+    salesContext.setSales([]);
+    localStorage.removeItem('pos_sales');
   };
 
-  const historyByMonth = useMemo(() => {
-    const buckets = new Map<string, { label: string; items: ClearedSalesBatch[] }>();
-    for (const entry of clearedSalesHistory) {
-      const d = new Date(entry.clearedAt);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      const label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
-      const existing = buckets.get(key);
-      if (existing) existing.items.push(entry);
-      else buckets.set(key, { label, items: [entry] });
-    }
-    const sortedKeys = Array.from(buckets.keys()).sort((a, b) => b.localeCompare(a));
-    return sortedKeys.map((key) => {
-      const bucket = buckets.get(key)!;
-      bucket.items.sort((a, b) => new Date(b.clearedAt).getTime() - new Date(a.clearedAt).getTime());
-      return { key, label: bucket.label, items: bucket.items };
-    });
-  }, [clearedSalesHistory]);
-
-  const toggleHistorySelection = (id: string) => {
-    setSelectedHistoryIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  };
-
-  const setHistorySelection = (ids: string[], selected: boolean) => {
-    setSelectedHistoryIds((prev) => {
-      if (selected) {
-        const set = new Set(prev);
-        for (const id of ids) set.add(id);
-        return Array.from(set);
-      }
-      return prev.filter((id) => !ids.includes(id));
-    });
-  };
-
-  // Inline input state for each column
-  const [inputs, setInputs] = useState<Record<SalesCol, { name: string; price: string }>>({
-    general: { name: '', price: '' },
-    'store-cashier': { name: '', price: '' },
-    'store-gcash': { name: '', price: '' },
-    globe: { name: '', price: '' },
-    smart: { name: '', price: '' },
-  });
-
-  // Add state for load network
-  const [loadNetwork, setLoadNetwork] = useState<'globe' | 'smart'>('globe');
-
-  // Add state for unlisted item input (only price needed now)
-  const [unlistedInput, setUnlistedInput] = useState<{ price: string }>({ price: '' });
-
-  const handleInputChange = (col: SalesCol, field: string, value: string) => {
-    setInputs((prev) => ({ ...prev, [col]: { ...prev[col], [field]: value } }));
-  };
-
-  // Add handler for unlisted item input (only price)
-  const handleUnlistedInputChange = (value: string) => {
-    setUnlistedInput({ price: value });
-  };
-
-  // Add handler for adding unlisted items
-  const handleAddUnlistedItem = () => {
-    if (!unlistedInput.price || isNaN(Number(unlistedInput.price)) || Number(unlistedInput.price) <= 0) {
-      setSnackbar({ open: true, message: 'Please enter a valid price for unlisted sales.', severity: 'error' });
-      return;
-    }
-    
-    const sale = {
-      id: Date.now().toString(),
-      date: new Date(),
-      items: [{ name: 'Unlisted Sales', quantity: 1, price: Number(unlistedInput.price) }],
-      total: Number(unlistedInput.price),
-      type: 'general' as const,
-    };
-    salesContext.addSale(sale);
-    setSnackbar({ open: true, message: 'Unlisted sales added!', severity: 'success' });
-    setUnlistedInput({ price: '' });
-  };
-
-  const handleUnlistedKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleAddUnlistedItem();
-    }
-  };
-
-  const handleAddSale = (col: SalesCol) => {
-    const input = inputs[col];
-    if (isLoadNetwork(col)) {
-      const network: 'globe' | 'smart' = col;
-      if (!input.price || isNaN(Number(input.price)) || Number(input.price) <= 0) {
-        setSnackbar({ open: true, message: 'Please enter a valid price.', severity: 'error' });
-        return;
-      }
-      const sale = {
-        id: Date.now().toString(),
-        date: new Date(),
-        items: [{ name: `Load (${network.charAt(0).toUpperCase() + network.slice(1)})`, quantity: 1, price: Number(input.price) }],
-        total: Number(input.price),
-        type: 'load' as const,
-      };
-      salesContext.addSale(sale);
-      setSnackbar({ open: true, message: 'Sale added!', severity: 'success' });
-      setInputs((prev) => ({ ...prev, [col]: { name: '', price: '' } }));
-      return;
-    } else if (col === 'general' || isStorePurchase(col)) {
-      if (!input.name || !input.price || isNaN(Number(input.price)) || Number(input.price) <= 0) {
-        setSnackbar({ open: true, message: 'Please enter a valid name and price.', severity: 'error' });
-        return;
-      }
-      
-      // For store purchases, we need to store the payment method in the sale
-      const saleType: 'general' | 'store' = isStorePurchase(col) ? 'store' : 'general';
-      const paymentMethod: 'cashier' | 'gcash' | undefined = col === 'store-cashier' ? 'cashier' : col === 'store-gcash' ? 'gcash' : undefined;
-      
-      const sale = {
-        id: Date.now().toString(),
-        date: new Date(),
-        items: [{ name: input.name, quantity: 1, price: Number(input.price) }],
-        total: Number(input.price),
-        type: saleType,
-        paymentMethod: paymentMethod, // Add payment method to distinguish cashier vs gcash
-      };
-      salesContext.addSale(sale);
-      setSnackbar({ open: true, message: 'Sale added!', severity: 'success' });
-      setInputs((prev) => ({ ...prev, [col]: { name: '', price: '' } }));
-      return;
-    }
-  };
-
-  const handleInputKeyDown = (e: React.KeyboardEvent, col: SalesCol) => {
-    if (e.key === 'Enter') {
-      handleAddSale(col);
-    }
-  };
-
-  // Add delete sale function
-  const handleDeleteSale = (saleId: string) => {
-    const updatedSales = sales.filter(sale => sale.id !== saleId);
-    salesContext.setSales(updatedSales);
-    localStorage.setItem('pos_sales', JSON.stringify(updatedSales));
-    setSnackbar({ open: true, message: 'Sale deleted successfully', severity: 'success' });
+  const handleClearAllSales = () => {
+    clearCurrentSales('clear-all');
+    setClearDialogOpen(false);
+    setSnackbar({ open: true, message: 'Sales cleared. You can find them under History.', severity: 'success' });
   };
 
   const handleExportSales = async () => {
@@ -555,340 +973,98 @@ const SalesRecord: React.FC = () => {
     
     setSnackbar({
       open: true,
-      message: 'Beautiful sales report exported and recorded in Gross Sales!',
+      message: 'Report exported and totals recorded in Gross Sales.',
       severity: 'success',
     });
   };
 
-  const handleClearAllSales = () => {
-    addToClearedHistory(sales, 'clear-all');
-    salesContext.setSales([]);
-    localStorage.removeItem('pos_sales');
-    setClearDialogOpen(false);
-    setSnackbar({
-      open: true,
-      message: 'All sales have been cleared successfully!',
-      severity: 'success',
-    });
+  const handleConfirmExport = async () => {
+    setExporting(true);
+    try {
+      await handleExportSales();
+      if (clearAfterExport) {
+        clearCurrentSales('export-and-clear');
+        setSnackbar({ open: true, message: 'Report exported, recorded in Gross Sales, and sales moved to History.', severity: 'success' });
+      }
+      setExportDialogOpen(false);
+      setClearAfterExport(false);
+    } catch (error) {
+      console.error('Export failed:', error);
+      setSnackbar({ open: true, message: 'Export failed. Nothing was recorded or cleared.', severity: 'error' });
+    } finally {
+      setExporting(false);
+    }
   };
 
-  // 1. Calculate general sales total including cashier purchases, but only list general sales in the table
-  const generalSales = sales.filter(sale => sale.type === 'general');
-  const cashierSales = sales.filter(sale => sale.type === 'store' && sale.paymentMethod === 'cashier');
-  const generalTotal = generalSales.reduce((sum, sale) => sum + sale.total, 0);
-  const cashierTotal = cashierSales.reduce((sum, sale) => sum + sale.total, 0);
-  const generalNetTotal = generalTotal - cashierTotal; // Net total for table
-  const generalGrossTotal = generalTotal; // Gross total for big total display
-
-  const renderSalesTable = (type: 'general' | 'store' | 'load', network?: 'globe' | 'smart', paymentMethod?: 'cashier' | 'gcash', showInputRow = true, showSales = true) => {
-    let filteredSales = sales.filter((sale) => sale.type === type);
-    
-    // Filter by payment method for store purchases
-    if (type === 'store' && paymentMethod) {
-      filteredSales = filteredSales.filter((sale) => sale.paymentMethod === paymentMethod);
-    }
-    
-    let col: SalesCol = (type === 'load' && network) ? network : 
-                       (type === 'store' && paymentMethod) ? `store-${paymentMethod}` as SalesCol :
-                       (type as SalesCol);
-    
-    // For the main Load table (input only, no sales), show total of all load sales
-    let total = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
-    if (type === 'load' && !network && showInputRow && !showSales) {
-      filteredSales = [];
-      // Sum all load sales for the total
-      total = sales.filter((sale) => sale.type === 'load').reduce((sum, sale) => sum + sale.total, 0);
-    }
-    if (type === 'load' && network) {
-      filteredSales = filteredSales.filter((sale) => sale.items[0].name.toLowerCase().includes(network));
-      total = filteredSales.reduce((sum, sale) => sum + sale.total, 0);
-    }
-    
-    // For general sales table, use the net total (general - cashier)
-    if (type === 'general') {
-      total = generalNetTotal;
-    }
-    
-    // Unlisted items are now actual sales entries, so just use the sales total
-    const finalTotal = total;
-    
-    return (
-      <TableContainer component={Paper} elevation={2} sx={{ borderRadius: 2, boxShadow: 1, mt: 2, bgcolor: theme.palette.mode === 'dark' ? theme.palette.background.paper : undefined }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow sx={tableHeaderSx}>
-              <TableCell>Name</TableCell>
-              <TableCell align="right">Price</TableCell>
-              <TableCell align="right">Actions</TableCell>
-            </TableRow>
-            {showInputRow && (
-              <TableRow>
-                {type === 'load' ? (
-                  <>
-                    <TableCell>
-                      <FormControl size="small" fullWidth>
-                        <InputLabel id="load-network-label">Network</InputLabel>
-                        <Select
-                          labelId="load-network-label"
-                          value={loadNetwork}
-                          label="Network"
-                          onChange={e => setLoadNetwork(e.target.value as 'globe' | 'smart')}
-                          fullWidth
-                        >
-                          <MenuItem value="globe">Globe</MenuItem>
-                          <MenuItem value="smart">Smart</MenuItem>
-                        </Select>
-                      </FormControl>
-                    </TableCell>
-                    <TableCell align="right">
-                      <TextField
-                        placeholder="Price"
-                        value={inputs[loadNetwork].price}
-                        onChange={e => handleInputChange(loadNetwork, 'price', e.target.value)}
-                        onKeyDown={e => handleInputKeyDown(e, loadNetwork)}
-                        size="small"
-                        type="number"
-                        inputProps={{ min: 0, step: 0.01 }}
-                        fullWidth
-                      />
-                    </TableCell>
-                    <TableCell align="right">
-                      <IconButton color="primary" onClick={() => handleAddSale(loadNetwork)}>
-                        <AddIcon />
-                      </IconButton>
-                    </TableCell>
-                  </>
-                ) : (
-                  <>
-                    <TableCell>
-                      <TextField
-                        placeholder="Name"
-                        value={inputs[col].name}
-                        onChange={e => handleInputChange(col, 'name', e.target.value)}
-                        onKeyDown={e => handleInputKeyDown(e, col)}
-                        size="small"
-                        fullWidth
-                      />
-                    </TableCell>
-                    <TableCell align="right">
-                      <TextField
-                        placeholder="Price"
-                        value={inputs[col].price}
-                        onChange={e => handleInputChange(col, 'price', e.target.value)}
-                        onKeyDown={e => handleInputKeyDown(e, col)}
-                        size="small"
-                        fullWidth
-                        type="number"
-                        inputProps={{ min: 0, step: 0.01 }}
-                      />
-                    </TableCell>
-                    <TableCell align="right">
-                      <IconButton color="primary" onClick={() => handleAddSale(col)}>
-                        <AddIcon />
-                      </IconButton>
-                    </TableCell>
-                  </>
-                )}
-              </TableRow>
-            )}
-          </TableHead>
-          <TableBody>
-            {/* Only show sales if showSales is true */}
-            {showSales && (filteredSales.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} align="center">
-                  <Typography color="text.secondary">No sales found.</Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredSales.map((sale, idx) => (
-                <TableRow key={sale.id} sx={getRowSx(idx)}>
-                  <TableCell>{sale.items[0].name}</TableCell>
-                  <TableCell align="right">
-                    {sale.total.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                  </TableCell>
-                  <TableCell align="right">
-                    {(type === 'general' || type === 'store' || type === 'load') && (
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => handleDeleteSale(sale.id)}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))
-            ))}
-            {/* Only show Unlisted Item input for General Sales */}
-            {type === 'general' && (
-              <TableRow sx={{ bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[700] : theme.palette.grey[50] }}>
-                <TableCell>
-                  <Typography variant="body2" fontStyle="italic" color="text.secondary">
-                    Unlisted Sales
-                  </Typography>
-                </TableCell>
-                <TableCell align="right">
-                  <TextField
-                    placeholder="Price"
-                    value={unlistedInput.price}
-                    onChange={e => handleUnlistedInputChange(e.target.value)}
-                    onKeyDown={handleUnlistedKeyDown}
-                    size="small"
-                    type="number"
-                    inputProps={{ min: 0, step: 0.01 }}
-                    sx={{ maxWidth: 120 }}
-                  />
-                </TableCell>
-                <TableCell align="right">
-                  <IconButton color="secondary" onClick={handleAddUnlistedItem}>
-                    <AddIcon />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
-            )}
-            <TableRow>
-              <TableCell colSpan={1}>
-                <Typography variant="subtitle1">Total</Typography>
-              </TableCell>
-              <TableCell align="right" colSpan={2}>
-                <Typography variant="subtitle1" color={finalTotal < 0 ? 'error' : 'inherit'}>
-                  {finalTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                </Typography>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </TableContainer>
-    );
+  const confirmDeleteHistory = () => {
+    if (!historyToDelete) return;
+    const ids = new Set(historyToDelete);
+    setClearedSalesHistory((prev) => prev.filter((h) => !ids.has(h.id)));
+    setSelectedHistoryIds((prev) => prev.filter((id) => !ids.has(id)));
+    setSnackbar({ open: true, message: `Deleted ${ids.size} record${ids.size !== 1 ? 's' : ''} from History.`, severity: 'success' });
+    setHistoryToDelete(null);
   };
 
-  // NEW: Render Store Purchase section with Cashier and GCash
-  const renderStorePurchaseSection = () => {
-    const cashierSales = sales.filter((sale) => sale.type === 'store' && sale.paymentMethod === 'cashier');
-    const gcashSales = sales.filter((sale) => sale.type === 'store' && sale.paymentMethod === 'gcash');
-    
-    const cashierTotal = cashierSales.reduce((sum, sale) => sum + sale.total, 0);
-    const gcashTotal = gcashSales.reduce((sum, sale) => sum + sale.total, 0);
-    const universalTotal = cashierTotal + gcashTotal;
+  const sortedHistory = useMemo(
+    () => [...clearedSalesHistory].sort((a, b) => new Date(b.clearedAt).getTime() - new Date(a.clearedAt).getTime()),
+    [clearedSalesHistory]
+  );
 
+  const toggleHistorySelection = useCallback((id: string) => {
+    setSelectedHistoryIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }, []);
+
+  const requestDeleteOneHistory = useCallback((batch: ClearedSalesBatch) => setHistoryToDelete([batch.id]), []);
+
+  const filterChip = (value: Filter, label: string) => (
+    <Chip
+      key={value}
+      label={`${label} · ${counts[value]}`}
+      color={filter === value ? 'primary' : 'default'}
+      variant={filter === value ? 'filled' : 'outlined'}
+      onClick={() => setFilter(value)}
+      sx={{ bgcolor: filter === value ? undefined : 'background.paper' }}
+    />
+  );
+
+  const historyMonthHeader = (batch: ClearedSalesBatch, index: number) => {
+    const label = new Date(batch.clearedAt).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+    const prev = sortedHistory[index - 1];
+    const prevLabel = prev ? new Date(prev.clearedAt).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' }) : null;
+    if (label === prevLabel) return null;
     return (
-      <Box>
-        {/* Cashier Purchase Section */}
-        <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}>
-            <CashierIcon color="primary" fontSize="small" />
-            <Typography variant="subtitle1" fontWeight={700}>Cashier Purchase:</Typography>
-          </Box>
-          {renderSalesTable('store', undefined, 'cashier', true, true)}
-        </Box>
-
-        {/* GCash Purchase Section */}
-        <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 1 }}>
-            <GcashIcon color="success" fontSize="small" />
-            <Typography variant="subtitle1" fontWeight={700}>GCash Purchase:</Typography>
-          </Box>
-          {renderSalesTable('store', undefined, 'gcash', true, true)}
-        </Box>
-        
-        {/* Universal Total */}
-        <Box sx={{ 
-          bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.grey[100], 
-          p: 2, 
-          borderRadius: 2,
-          textAlign: 'center'
-        }}>
-          <Typography variant="h6" fontWeight={700} color="primary">
-            Total Store Purchases: {universalTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-          </Typography>
-        </Box>
+      <Box key={`month-${label}`} sx={{ px: 2, py: 1, bgcolor: 'background.default', borderBottom: 1, borderColor: 'divider' }}>
+        <Typography variant="subtitle2">{label}</Typography>
       </Box>
     );
   };
 
-  const tableHeaderSx = {
-    bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[900] : 'grey.100',
-    '& .MuiTableCell-head': {
-      color: theme.palette.mode === 'dark' ? '#fff' : 'inherit',
-      fontWeight: 800,
-      fontSize: 16,
-      letterSpacing: 0.5,
-    },
-  };
-  const getRowSx = (idx: number) => theme.palette.mode === 'dark'
-    ? { bgcolor: idx % 2 === 0 ? theme.palette.grey[800] : theme.palette.grey[900] }
-    : { bgcolor: idx % 2 === 0 ? 'grey.50' : undefined };
+  const allHistorySelected = sortedHistory.length > 0 && selectedHistoryIds.length === sortedHistory.length;
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <AssessmentIcon color="primary" sx={{ mr: 1, fontSize: 32 }} />
-          <Typography variant="h4" fontWeight={800} gutterBottom letterSpacing={1}>
-            Sales Record
+      {/* Header */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 2, mb: 1 }}>
+        <Box>
+          <Typography variant="h5">Sales Record</Typography>
+          <Typography variant="body2" color="text.secondary">
+            {activeTab === 0
+              ? oldestSaleDate
+                ? `Current period since ${oldestSaleDate.toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                : 'No entries in the current period yet'
+              : 'Sales that were cleared or exported, kept for reference'}
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          {activeTab === 0 ? (
-            <>
-              <Button
-                variant="contained"
-                color="error"
-                startIcon={<ClearIcon />}
-                onClick={() => setClearDialogOpen(true)}
-                sx={{ 
-                  borderRadius: 2,
-                  backgroundColor: theme.palette.error.main,
-                  '&:hover': {
-                    backgroundColor: theme.palette.error.dark,
-                  },
-                  minWidth: '150px'
-                }}
-              >
-                Clear All Sales
-              </Button>
-              <Button
-                variant="contained"
-                startIcon={<FileDownloadIcon />}
-                onClick={handleExportSales}
-                sx={{ borderRadius: 2 }}
-              >
-                Export Sales
-              </Button>
-            </>
-          ) : (
-            <>
-              <Chip
-                icon={<HistoryIcon />}
-                label={`${clearedSalesHistory.length} cleared record${clearedSalesHistory.length === 1 ? '' : 's'}`}
-                variant="outlined"
-                sx={{ fontWeight: 700 }}
-              />
-              <Button
-                variant="contained"
-                color="error"
-                startIcon={<DeleteIcon />}
-                disabled={selectedHistoryIds.length === 0}
-                onClick={() => deleteClearedHistory(selectedHistoryIds)}
-                sx={{ borderRadius: 2, minWidth: 160 }}
-              >
-                Delete Selected
-              </Button>
-              <Button
-                variant="outlined"
-                color="error"
-                startIcon={<ClearIcon />}
-                disabled={clearedSalesHistory.length === 0}
-                onClick={() => deleteClearedHistory(clearedSalesHistory.map((h) => h.id))}
-                sx={{ borderRadius: 2, minWidth: 160 }}
-              >
-                Clear History
-              </Button>
-            </>
-          )}
-        </Box>
+        {activeTab === 0 && (
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button color="error" variant="outlined" onClick={() => setClearDialogOpen(true)} disabled={sales.length === 0}>
+              Clear sales
+            </Button>
+            <Button variant="contained" startIcon={<FileDownloadIcon />} onClick={() => setExportDialogOpen(true)} disabled={sales.length === 0}>
+              Export report
+            </Button>
+          </Box>
+        )}
       </Box>
 
       <Tabs
@@ -897,356 +1073,235 @@ const SalesRecord: React.FC = () => {
           setActiveTab(value);
           setSelectedHistoryIds([]);
         }}
-        sx={{ mb: 2 }}
+        sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
       >
         <Tab label="Current" />
-        <Tab label="History" />
+        <Tab label={`History${clearedSalesHistory.length ? ` · ${clearedSalesHistory.length}` : ''}`} icon={<HistoryIcon fontSize="small" />} iconPosition="start" />
       </Tabs>
 
-      {/* Add confirmation dialog */}
-      <Dialog
-        open={clearDialogOpen}
-        onClose={() => setClearDialogOpen(false)}
-        PaperProps={{ 
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: 12, 
-            overflow: 'hidden',
-            bgcolor: 'background.paper' 
-          } 
-        }}
-      >
-        <Box sx={{ 
-          background: '#b91c1c',
-          color: 'white',
-          p: 3,
-          position: 'relative'
-        }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'rgba(255,255,255,0.2)', width: 48, height: 48 }}>
-              <ClearIcon sx={{ fontSize: 28 }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h6" fontWeight={700}>
-                Confirm Clear All Sales
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                This action cannot be undone
-              </Typography>
+      {activeTab === 0 ? (
+        <>
+          <SummaryTiles summary={summary} />
+
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '340px minmax(0, 1fr)' },
+              gap: 2,
+              mt: 2,
+              alignItems: 'start',
+            }}
+          >
+            <Box sx={{ position: { lg: 'sticky' }, top: { lg: 84 } }}>
+              <EntryForm onAdd={handleAdd} />
+            </Box>
+
+            <Box sx={{ minWidth: 0 }}>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1.5 }}>
+                {filterChip('all', 'All')}
+                {filterChip('general', 'Sales')}
+                {filterChip('store', 'Purchases')}
+                {filterChip('load', 'Load')}
+                <TextField
+                  size="small"
+                  placeholder="Search items"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  sx={{ ml: { sm: 'auto' }, width: { xs: '100%', sm: 240 } }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" color="action" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: searchQuery ? (
+                      <InputAdornment position="end">
+                        <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                          <CloseIcon fontSize="small" />
+                        </IconButton>
+                      </InputAdornment>
+                    ) : undefined,
+                  }}
+                />
+              </Box>
+
+              <Card sx={{ overflow: 'visible' }}>
+                {filteredSales.length === 0 ? (
+                  <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
+                    <SalesIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
+                    <Typography fontWeight={600}>{sales.length === 0 ? 'No entries yet' : 'Nothing matches'}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {sales.length === 0
+                        ? 'Checkouts from the Basket appear here automatically. Use Add entry for anything else.'
+                        : 'Try another filter or search term.'}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <>
+                    <SalesList sales={filteredSales} limit={visibleCount} onDelete={handleDeleteSale} stickyHeaders />
+                    {hasMore && (
+                      <Box ref={sentinelRef} sx={{ textAlign: 'center', py: 1.5 }}>
+                        <Button onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}>
+                          Show more ({(filteredSales.length - visibleCount).toLocaleString()} remaining)
+                        </Button>
+                      </Box>
+                    )}
+                  </>
+                )}
+              </Card>
             </Box>
           </Box>
-        </Box>
-        <DialogContent sx={{ p: 4 }}>
-          <Typography variant="body1" sx={{ mb: 2 }}>
-            Are you sure you want to clear all sales records? This will permanently delete all sales data and cannot be undone.
-          </Typography>
-          <Box sx={{
-            p: 2,
-            borderRadius: 2,
-            bgcolor: 'warning.50',
-            border: '1px solid',
-            borderColor: 'warning.200'
-          }}>
-            <Typography variant="body2" color="warning.dark" fontWeight={600}>
-              ⚠️ Warning: Consider exporting your sales data before clearing to keep a backup.
-            </Typography>
-          </Box>
-        </DialogContent>
-        <DialogActions sx={{ p: 3, gap: 2 }}>
-          <Button 
-            onClick={() => setClearDialogOpen(false)}
-            variant="outlined"
-            sx={{ borderRadius: 2, minWidth: 100 }}
+        </>
+      ) : (
+        <Card>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1,
+              py: 1,
+              minHeight: 56,
+              borderBottom: 1,
+              borderColor: 'divider',
+            }}
           >
+            <Checkbox
+              size="small"
+              checked={allHistorySelected}
+              indeterminate={selectedHistoryIds.length > 0 && !allHistorySelected}
+              disabled={sortedHistory.length === 0}
+              onChange={(e) => setSelectedHistoryIds(e.target.checked ? sortedHistory.map((h) => h.id) : [])}
+              inputProps={{ 'aria-label': 'Select all history records' }}
+            />
+            <Typography fontWeight={600} sx={{ flex: 1 }}>
+              {selectedHistoryIds.length > 0
+                ? `${selectedHistoryIds.length} selected`
+                : `${sortedHistory.length} record${sortedHistory.length !== 1 ? 's' : ''}`}
+            </Typography>
+            {selectedHistoryIds.length > 0 && (
+              <Button color="error" variant="contained" startIcon={<DeleteIcon />} onClick={() => setHistoryToDelete(selectedHistoryIds)}>
+                Delete selected
+              </Button>
+            )}
+          </Box>
+          {sortedHistory.length === 0 ? (
+            <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
+              <HistoryIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
+              <Typography fontWeight={600}>No history yet</Typography>
+              <Typography variant="body2" color="text.secondary">
+                When you clear or export-and-clear sales, they’re kept here.
+              </Typography>
+            </Box>
+          ) : (
+            sortedHistory.map((batch, index) => (
+              <React.Fragment key={batch.id}>
+                {historyMonthHeader(batch, index)}
+                <HistoryBatch
+                  batch={batch}
+                  selected={selectedHistoryIds.includes(batch.id)}
+                  onToggle={toggleHistorySelection}
+                  onDelete={requestDeleteOneHistory}
+                />
+              </React.Fragment>
+            ))
+          )}
+        </Card>
+      )}
+
+      {/* Clear dialog */}
+      <Dialog open={clearDialogOpen} onClose={() => setClearDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Clear current sales?</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            {sales.length} entr{sales.length !== 1 ? 'ies' : 'y'} ({formatPeso(summary.general)} in sales) will be moved to History and the
+            current period starts fresh. Export first if you need a report.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setClearDialogOpen(false)}>
             Cancel
           </Button>
-          <Button 
-            onClick={handleClearAllSales} 
-            color="error" 
-            variant="contained"
-            sx={{ borderRadius: 2, minWidth: 100 }}
-          >
-            Clear All Sales
+          <Button color="error" variant="contained" onClick={handleClearAllSales}>
+            Clear sales
           </Button>
         </DialogActions>
       </Dialog>
 
-      {activeTab === 0 ? (
-        <Grid container spacing={3} sx={{ mt: 1 }}>
-          <Grid item xs={12} md={4}>
-            <Card sx={{
-              borderRadius: 4,
-              boxShadow: 6,
-              p: 0,
-              height: '100%',
-              overflow: 'hidden',
-              background: 'transparent',
-              display: 'flex',
-              flexDirection: 'column',
-            }}>
-              <Box sx={{
-                bgcolor: 'banner.main',
-                color: 'white',
-                p: 3,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                boxShadow: 2,
-              }}>
-                <Box sx={{ bgcolor: 'primary.main', color: '#fff', borderRadius: '50%', p: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 2 }}>
-                  <ShoppingCartIcon fontSize="large" />
-                </Box>
-                <Box>
-                  <Typography variant="h5" fontWeight={800} sx={{ color: 'white' }}>General Sales</Typography>
-                  <Typography variant="subtitle2" sx={{ color: 'white', opacity: 0.85 }}>Includes Cashier Purchases in total</Typography>
-                </Box>
-              </Box>
-              <Box sx={{ px: 3, pb: 2, pt: 2, bgcolor: 'background.paper', flex: 1, display: 'flex', flexDirection: 'column', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 }}>
-                <CardContent sx={{ p: 0 }}>
-                  {renderSalesTable('general', undefined, undefined, true, true)}
-                </CardContent>
-                <Box sx={{
-                  bgcolor: theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.grey[100],
-                  p: 2,
-                  borderRadius: 2,
-                  textAlign: 'center',
-                  mt: 2
-                }}>
-                  <Typography variant="h6" fontWeight={700} color="primary">
-                    Total General Sales: {generalGrossTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                  </Typography>
-                </Box>
-              </Box>
-            </Card>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Card sx={{
-              borderRadius: 4,
-              boxShadow: 6,
-              p: 0,
-              height: '100%',
-              overflow: 'hidden',
-              background: 'transparent',
-              display: 'flex',
-              flexDirection: 'column',
-            }}>
-              <Box sx={{
-                background: '#0e7490',
-                color: 'white',
-                p: 3,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                boxShadow: 2,
-              }}>
-                <Box sx={{ bgcolor: 'info.main', color: '#fff', borderRadius: '50%', p: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 2 }}>
-                  <StoreIcon fontSize="large" />
-                </Box>
-                <Box>
-                  <Typography variant="h5" fontWeight={800} sx={{ color: 'white' }}>Store Purchases</Typography>
-                </Box>
-              </Box>
-              <Box sx={{ px: 3, pb: 2, pt: 2, bgcolor: 'background.paper', flex: 1, display: 'flex', flexDirection: 'column', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 }}>
-                <CardContent sx={{ p: 0 }}>
-                  {renderStorePurchaseSection()}
-                </CardContent>
-              </Box>
-            </Card>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Card sx={{
-              borderRadius: 4,
-              boxShadow: 6,
-              p: 0,
-              height: '100%',
-              overflow: 'hidden',
-              background: 'transparent',
-              display: 'flex',
-              flexDirection: 'column',
-            }}>
-              <Box sx={{
-                background: '#15803d',
-                color: 'white',
-                p: 3,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 2,
-                borderTopLeftRadius: 24,
-                borderTopRightRadius: 24,
-                boxShadow: 2,
-              }}>
-                <Box sx={{ bgcolor: 'success.main', color: '#fff', borderRadius: '50%', p: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 2 }}>
-                  <LoadIcon fontSize="large" />
-                </Box>
-                <Box>
-                  <Typography variant="h5" fontWeight={800} sx={{ color: 'white' }}>Load Sales</Typography>
-                </Box>
-              </Box>
-              <Box sx={{ px: 3, pb: 2, pt: 2, bgcolor: 'background.paper', flex: 1, display: 'flex', flexDirection: 'column', borderBottomLeftRadius: 24, borderBottomRightRadius: 24 }}>
-                <CardContent sx={{ p: 0 }}>
-                  {renderSalesTable('load', undefined, undefined, true, false)}
-                  <Grid container spacing={2} sx={{ mt: 2 }}>
-                    <Grid item xs={12} md={6}>
-                      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, color: 'primary.main' }}>Globe</Typography>
-                      {renderSalesTable('load', 'globe', undefined, false, true)}
-                    </Grid>
-                    <Grid item xs={12} md={6}>
-                      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1, color: 'primary.main' }}>Smart</Typography>
-                      {renderSalesTable('load', 'smart', undefined, false, true)}
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </Box>
-            </Card>
-          </Grid>
-        </Grid>
-      ) : (
-        <Box sx={{ mt: 1 }}>
-          {clearedSalesHistory.length === 0 ? (
-            <Box sx={{ p: 4, textAlign: 'center' }}>
-              <Typography variant="h6" color="text.secondary" fontWeight={700}>
-                No cleared sales records yet
-              </Typography>
-            </Box>
-          ) : (
-            <Box>
-              {historyByMonth.map((month) => {
-                const monthIds = month.items.map((i) => i.id);
-                const allSelected = monthIds.length > 0 && monthIds.every((id) => selectedHistoryIds.includes(id));
-                const someSelected = monthIds.some((id) => selectedHistoryIds.includes(id)) && !allSelected;
-                const monthTotal = month.items.reduce((sum, batch) => sum + batch.sales.reduce((s, sale) => s + sale.total, 0), 0);
-                const monthSalesCount = month.items.reduce((sum, b) => sum + b.sales.length, 0);
+      {/* Export dialog */}
+      <Dialog open={exportDialogOpen} onClose={() => !exporting && setExportDialogOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Export sales report</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            Saves an Excel report of the {sales.length} current entr{sales.length !== 1 ? 'ies' : 'y'} and{' '}
+            <strong>adds these totals to Gross Sales</strong>. Exporting the same period twice records it twice.
+          </Typography>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 0.5, mb: 2 }}>
+            <Typography variant="body2">Sales</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.general)}</Typography>
+            <Typography variant="body2">Store purchases</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.purchases)}</Typography>
+            <Typography variant="body2">Load sales</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.load)}</Typography>
+          </Box>
+          <FormControlLabel
+            control={<Checkbox checked={clearAfterExport} onChange={(e) => setClearAfterExport(e.target.checked)} />}
+            label="Clear current sales after exporting (kept in History)"
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setExportDialogOpen(false)} disabled={exporting}>
+            Cancel
+          </Button>
+          <Button variant="contained" startIcon={<FileDownloadIcon />} onClick={handleConfirmExport} disabled={exporting}>
+            {exporting ? 'Exporting…' : 'Export'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
-                return (
-                  <Accordion key={month.key} defaultExpanded>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 2 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                          <Checkbox
-                            checked={allSelected}
-                            indeterminate={someSelected}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(_, checked) => setHistorySelection(monthIds, checked)}
-                          />
-                          <Typography fontWeight={800}>{month.label}</Typography>
-                          <Chip label={`${month.items.length} clear${month.items.length === 1 ? '' : 's'}`} size="small" />
-                          <Chip label={`${monthSalesCount} sale${monthSalesCount === 1 ? '' : 's'}`} size="small" variant="outlined" />
-                        </Box>
-                        <Typography fontWeight={700}>
-                          {monthTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                        </Typography>
-                      </Box>
-                    </AccordionSummary>
-                    <AccordionDetails>
-                      <Stack spacing={1.5}>
-                        {month.items.map((entry) => {
-                          const selected = selectedHistoryIds.includes(entry.id);
-                          const clearedAt = new Date(entry.clearedAt);
-                          const entryTotal = entry.sales.reduce((sum, sale) => sum + sale.total, 0);
-                          const entrySalesSorted = [...entry.sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      {/* Delete history dialog */}
+      <Dialog open={historyToDelete !== null} onClose={() => setHistoryToDelete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          Delete {historyToDelete?.length === 1 ? 'this record' : `${historyToDelete?.length ?? 0} records`} from History?
+        </DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">The cleared sales in {historyToDelete?.length === 1 ? 'it' : 'them'} will be permanently deleted. This cannot be undone.</Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setHistoryToDelete(null)}>
+            Cancel
+          </Button>
+          <Button color="error" variant="contained" onClick={confirmDeleteHistory}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
 
-                          return (
-                            <Accordion key={entry.id} disableGutters sx={{ borderRadius: 2, '&:before': { display: 'none' } }}>
-                              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 2 }}>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                                    <Checkbox
-                                      checked={selected}
-                                      onClick={(e) => e.stopPropagation()}
-                                      onChange={() => toggleHistorySelection(entry.id)}
-                                    />
-                                    <Typography fontWeight={700}>
-                                      {clearedAt.toLocaleString()}
-                                    </Typography>
-                                    <Chip size="small" label={entry.reason === 'clear-all' ? 'Clear All' : 'Export & Clear'} variant="outlined" />
-                                    <Chip size="small" label={`${entry.sales.length} sale${entry.sales.length === 1 ? '' : 's'}`} />
-                                  </Box>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                    <Typography fontWeight={700}>
-                                      {entryTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                                    </Typography>
-                                    <IconButton
-                                      size="small"
-                                      color="error"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        deleteClearedHistory([entry.id]);
-                                      }}
-                                    >
-                                      <DeleteIcon fontSize="small" />
-                                    </IconButton>
-                                  </Box>
-                                </Box>
-                              </AccordionSummary>
-                              <AccordionDetails>
-                                {entrySalesSorted.length === 0 ? (
-                                  <Typography color="text.secondary">No sales in this record.</Typography>
-                                ) : (
-                                  <TableContainer component={Paper} elevation={1} sx={{ borderRadius: 2 }}>
-                                    <Table size="small">
-                                      <TableHead>
-                                        <TableRow sx={tableHeaderSx}>
-                                          <TableCell>Date</TableCell>
-                                          <TableCell>Type</TableCell>
-                                          <TableCell>Item</TableCell>
-                                          <TableCell align="right">Total</TableCell>
-                                        </TableRow>
-                                      </TableHead>
-                                      <TableBody>
-                                        {entrySalesSorted.map((sale, idx) => {
-                                          const saleDate = new Date(sale.date);
-                                          const itemLabel = sale.items.length <= 1
-                                            ? (sale.items[0]?.name ?? '')
-                                            : `${sale.items[0]?.name ?? ''} +${sale.items.length - 1}`;
-                                          return (
-                                            <TableRow key={sale.id} sx={getRowSx(idx)}>
-                                              <TableCell>{saleDate.toLocaleString()}</TableCell>
-                                              <TableCell sx={{ textTransform: 'capitalize' }}>{sale.type}</TableCell>
-                                              <TableCell>{itemLabel}</TableCell>
-                                              <TableCell align="right">
-                                                {sale.total.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                                              </TableCell>
-                                            </TableRow>
-                                          );
-                                        })}
-                                        <TableRow>
-                                          <TableCell colSpan={3}>
-                                            <Typography fontWeight={800}>Batch Total</Typography>
-                                          </TableCell>
-                                          <TableCell align="right">
-                                            <Typography fontWeight={800}>
-                                              {entryTotal.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' })}
-                                            </Typography>
-                                          </TableCell>
-                                        </TableRow>
-                                      </TableBody>
-                                    </Table>
-                                  </TableContainer>
-                                )}
-                              </AccordionDetails>
-                            </Accordion>
-                          );
-                        })}
-                      </Stack>
-                    </AccordionDetails>
-                  </Accordion>
-                );
-              })}
-            </Box>
-          )}
-        </Box>
-      )}
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={2000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
+        autoHideDuration={snackbar.undo ? 5000 : 3000}
+        onClose={(_, reason) => reason !== 'clickaway' && setSnackbar((s) => ({ ...s, open: false }))}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
-        <Alert severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>
+        <Alert
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: '100%', alignItems: 'center' }}
+          action={
+            snackbar.undo ? (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => {
+                  snackbar.undo?.();
+                  setSnackbar((s) => ({ ...s, open: false, undo: undefined }));
+                }}
+              >
+                Undo
+              </Button>
+            ) : undefined
+          }
+        >
           {snackbar.message}
         </Alert>
       </Snackbar>
@@ -1254,4 +1309,4 @@ const SalesRecord: React.FC = () => {
   );
 };
 
-export default SalesRecord; 
+export default SalesRecord;

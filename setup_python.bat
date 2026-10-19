@@ -121,7 +121,7 @@ echo =========================================
 echo.
 
 REM Test the thermal printer setup
-echo Testing thermal printer detection...
+e jhnsxzg3scho Testing thermal printer detection...
 python thermal_printer.py list
 
 if %errorlevel% neq 0 (
