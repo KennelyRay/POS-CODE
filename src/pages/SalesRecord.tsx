@@ -37,6 +37,7 @@ import {
 } from '@mui/icons-material';
 import { GrossSalesContext, ProductsContext, SaleRecord, SalesContext } from '../App';
 import { saveAs } from 'file-saver';
+import PredictField, { Highlight } from '../components/PredictField';
 import ExcelJS from 'exceljs';
 
 type ClearedSalesBatch = {
@@ -459,20 +460,104 @@ const FormError: React.FC<{ message?: string; hint?: string }> = ({ message, hin
 
 type AddHandler = (sale: SaleRecord) => void;
 
-// Picking a known name fills in the price when the amount is still empty.
-const useNameWithPrice = (prices: Map<string, number>) => {
+type Suggestion = { name: string; price: number; source: 'recent' | 'product' };
+
+const SUGGESTION_LIMIT = 8;
+
+// Recent typed-in names come before product names in `list`; for a typed query, names
+// that start with it rank above word starts, which rank above matches anywhere.
+const rankSuggestions = (list: Suggestion[], query: string): Suggestion[] => {
+  const q = query.trim().toLowerCase();
+  if (!q) return list.filter((s) => s.source === 'recent').slice(0, 6);
+  const scored: Array<{ s: Suggestion; score: number; index: number }> = [];
+  list.forEach((s, index) => {
+    const name = s.name.toLowerCase();
+    if (name === q) return;
+    const score = name.startsWith(q) ? 3 : name.split(/[\s\-()/,.]+/).some((w) => w.startsWith(q)) ? 2 : name.includes(q) ? 1 : 0;
+    if (score > 0) scored.push({ s, score, index });
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.slice(0, SUGGESTION_LIMIT).map((x) => x.s);
+};
+
+const NameField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  suggestions: Suggestion[];
+  onPick: (suggestion: Suggestion) => void;
+  priceLabel: string;
+  error?: boolean;
+  inputRef: React.Ref<HTMLInputElement>;
+}> = ({ label, value, onChange, suggestions, onPick, priceLabel, error, inputRef }) => {
+  const getOptions = useCallback((query: string) => rankSuggestions(suggestions, query), [suggestions]);
+  return (
+    <Box sx={{ mb: 1 }}>
+      <PredictField<Suggestion>
+        value={value}
+        onChange={onChange}
+        getOptions={getOptions}
+        getKey={(s) => `${s.source}:${s.name}`}
+        onPick={onPick}
+        openWhenEmpty
+        heading={(query) => (query.trim() ? 'Suggestions' : 'Recently used')}
+        pickLabel="use"
+        inputRef={inputRef}
+        textFieldProps={{ size: 'small', fullWidth: true, label, error }}
+        renderOption={(s, query) => (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography variant="body2" fontWeight={600} noWrap>
+                <Highlight text={s.name} query={query} />
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {s.source === 'product' ? 'Product' : 'Used before'}
+              </Typography>
+            </Box>
+            <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+              <Typography variant="body2" fontWeight={700}>
+                {formatPeso(s.price)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {s.source === 'product' ? 'price' : priceLabel}
+              </Typography>
+            </Box>
+          </Box>
+        )}
+      />
+    </Box>
+  );
+};
+
+// Typing or picking a known name fills in its price when the amount is still empty,
+// and picking moves on to the amount.
+const useNameWithPrice = (suggestions: Suggestion[]) => {
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
+  const amountRef = useRef<HTMLInputElement | null>(null);
+  const prices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of suggestions) {
+      const key = s.name.trim().toLowerCase();
+      if (!map.has(key)) map.set(key, s.price);
+    }
+    return map;
+  }, [suggestions]);
   const changeName = (value: string) => {
     setName(value);
     const known = prices.get(value.trim().toLowerCase());
     if (known !== undefined && amount.trim() === '') setAmount(String(known));
   };
-  return { name, amount, setName, setAmount, changeName };
+  const pick = (s: Suggestion) => {
+    setName(s.name);
+    if (amount.trim() === '') setAmount(String(s.price));
+    amountRef.current?.focus();
+  };
+  return { name, amount, setName, setAmount, changeName, pick, amountRef };
 };
 
-const GeneralForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; prices: Map<string, number> }> = ({ onAdd, suggestions, prices }) => {
-  const { name, amount, setName, setAmount, changeName } = useNameWithPrice(prices);
+const GeneralForm: React.FC<{ onAdd: AddHandler; suggestions: Suggestion[] }> = ({ onAdd, suggestions }) => {
+  const { name, amount, setName, setAmount, changeName, pick, amountRef } = useNameWithPrice(suggestions);
   const [error, setError] = useState<string>();
   const nameRef = useRef<HTMLInputElement | null>(null);
   const unlisted = name.trim() === '';
@@ -490,25 +575,20 @@ const GeneralForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; prices: 
 
   return (
     <Box component="form" onSubmit={submit} noValidate>
-      <TextField
-        size="small"
-        fullWidth
+      <NameField
         label="Item name"
         value={name}
+        onChange={changeName}
+        suggestions={suggestions}
+        onPick={pick}
+        priceLabel="last sold for"
         inputRef={nameRef}
-        onChange={(e) => changeName(e.target.value)}
-        inputProps={{ list: 'sales-general-suggestions', autoComplete: 'off' }}
-        sx={{ mb: 1 }}
       />
-      <datalist id="sales-general-suggestions">
-        {suggestions.map((s) => (
-          <option key={s} value={s} />
-        ))}
-      </datalist>
       <Box sx={{ display: 'flex', gap: 1 }}>
         <AmountField
           value={amount}
           error={error}
+          inputRef={amountRef}
           onChange={(value) => {
             setAmount(value);
             setError(undefined);
@@ -523,8 +603,8 @@ const GeneralForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; prices: 
   );
 };
 
-const StoreForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; lastAmounts: Map<string, number> }> = ({ onAdd, suggestions, lastAmounts }) => {
-  const { name, amount, setName, setAmount, changeName } = useNameWithPrice(lastAmounts);
+const StoreForm: React.FC<{ onAdd: AddHandler; suggestions: Suggestion[] }> = ({ onAdd, suggestions }) => {
+  const { name, amount, setName, setAmount, changeName, pick, amountRef } = useNameWithPrice(suggestions);
   const [payment, setPayment] = useState<'cashier' | 'gcash'>('cashier');
   const [error, setError] = useState<string>();
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -543,29 +623,27 @@ const StoreForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; lastAmount
 
   return (
     <Box component="form" onSubmit={submit} noValidate>
-      <TextField
-        size="small"
-        fullWidth
+      <NameField
         label="What was bought"
         value={name}
-        inputRef={nameRef}
-        error={error === 'Enter what was bought'}
-        onChange={(e) => {
-          changeName(e.target.value);
+        onChange={(value) => {
+          changeName(value);
           setError(undefined);
         }}
-        inputProps={{ list: 'sales-store-suggestions', autoComplete: 'off' }}
-        sx={{ mb: 1 }}
+        suggestions={suggestions}
+        onPick={(s) => {
+          pick(s);
+          setError(undefined);
+        }}
+        priceLabel="last paid"
+        error={error === 'Enter what was bought'}
+        inputRef={nameRef}
       />
-      <datalist id="sales-store-suggestions">
-        {suggestions.map((s) => (
-          <option key={s} value={s} />
-        ))}
-      </datalist>
       <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
         <AmountField
           value={amount}
           error={error === 'Enter an amount above zero' ? error : undefined}
+          inputRef={amountRef}
           onChange={(value) => {
             setAmount(value);
             setError(undefined);
@@ -848,36 +926,26 @@ const SalesRecord: React.FC = () => {
     return { general, store, load, counts };
   }, [checkoutIds, generalFilter, loadFilter, searched, storeFilter]);
 
-  // Name suggestions: recent typed-in entries first, then product names; prices fill in on pick
-  const { generalSuggestions, generalPrices, storeSuggestions, storeLastAmounts } = useMemo(() => {
+  // Name suggestions: recent typed-in entries first, then product names
+  const { generalSuggestions, storeSuggestions } = useMemo(() => {
     const recent = sortNewestFirst([...sales, ...clearedSalesHistory.flatMap((h) => h.sales)]);
-    const generalNames = new Map<string, string>();
-    const storeNames = new Map<string, string>();
-    const prices = new Map<string, number>();
-    const lastAmounts = new Map<string, number>();
+    const general = new Map<string, Suggestion>();
+    const store = new Map<string, Suggestion>();
     for (const sale of recent) {
       if (sale.items.length !== 1 || checkoutIds.has(sale.id)) continue;
       const name = sale.items[0].name;
       const key = name.trim().toLowerCase();
-      if (sale.type === 'general' && !isUnlisted(sale) && !name.endsWith('-Paid') && generalNames.size < 40 && !generalNames.has(key)) {
-        generalNames.set(key, name);
-        prices.set(key, sale.total);
-      } else if (sale.type === 'store' && storeNames.size < 40 && !storeNames.has(key)) {
-        storeNames.set(key, name);
-        lastAmounts.set(key, sale.total);
+      if (sale.type === 'general' && !isUnlisted(sale) && !name.endsWith('-Paid') && general.size < 40 && !general.has(key)) {
+        general.set(key, { name, price: sale.total, source: 'recent' });
+      } else if (sale.type === 'store' && store.size < 40 && !store.has(key)) {
+        store.set(key, { name, price: sale.total, source: 'recent' });
       }
     }
     for (const product of products) {
       const key = product.name.trim().toLowerCase();
-      if (!generalNames.has(key)) generalNames.set(key, product.name);
-      if (!prices.has(key)) prices.set(key, product.price);
+      if (!general.has(key)) general.set(key, { name: product.name, price: product.price, source: 'product' });
     }
-    return {
-      generalSuggestions: Array.from(generalNames.values()),
-      generalPrices: prices,
-      storeSuggestions: Array.from(storeNames.values()),
-      storeLastAmounts: lastAmounts,
-    };
+    return { generalSuggestions: Array.from(general.values()), storeSuggestions: Array.from(store.values()) };
   }, [checkoutIds, clearedSalesHistory, products, sales]);
 
   const handleAdd = useCallback(
@@ -1371,7 +1439,7 @@ const SalesRecord: React.FC = () => {
                 after cashier purchases
               </>
             }
-            form={<GeneralForm onAdd={handleAdd} suggestions={generalSuggestions} prices={generalPrices} />}
+            form={<GeneralForm onAdd={handleAdd} suggestions={generalSuggestions} />}
             filter={generalFilter}
             onFilter={(value) => setGeneralFilter(value as GeneralFilter)}
             filters={[
@@ -1395,7 +1463,7 @@ const SalesRecord: React.FC = () => {
             icon={<PurchaseIcon />}
             total={summary.purchases}
             caption={`Cashier ${formatPeso(summary.cashier)} · GCash ${formatPeso(summary.gcash)}`}
-            form={<StoreForm onAdd={handleAdd} suggestions={storeSuggestions} lastAmounts={storeLastAmounts} />}
+            form={<StoreForm onAdd={handleAdd} suggestions={storeSuggestions} />}
             filter={storeFilter}
             onFilter={(value) => setStoreFilter(value as StoreFilter)}
             filters={[

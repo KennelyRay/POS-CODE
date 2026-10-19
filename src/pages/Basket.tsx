@@ -68,6 +68,7 @@ import { StoreSettingsContext } from '../App';
 import { GrossSalesContext } from '../App';
 import { usePrinter } from '../contexts/PrinterContext';
 import { BasketItem, useBasket } from '../contexts/BasketContext';
+import PredictField, { Highlight } from '../components/PredictField';
 
 const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
   if (!(element instanceof HTMLElement)) return false;
@@ -84,6 +85,58 @@ const createReceiptQrData = (receiptId: string) => {
 };
 
 const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+
+const PREDICTION_LIMIT = 8;
+
+const editDistance = (a: string, b: string) => {
+  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let diagonal = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const above = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diagonal = above;
+    }
+  }
+  return row[b.length];
+};
+
+// Smallest number of typos between `token` and the start of any word, or null when it's
+// too far off. Comparing against word starts lets a half-typed word with a typo match.
+const typoDistance = (token: string, words: string[]) => {
+  const allowed = token.length >= 6 ? 2 : token.length >= 3 ? 1 : 0;
+  if (allowed === 0) return null;
+  let best = Infinity;
+  for (const word of words) {
+    for (const length of [token.length - 1, token.length, token.length + 1]) {
+      if (length > 0 && length <= word.length) best = Math.min(best, editDistance(token, word.slice(0, length)));
+    }
+  }
+  return best <= allowed ? best : null;
+};
+
+// Match tiers for the search predictions; higher wins. Popularity only reorders within
+// a tier (its bonus is capped below the smallest gap between tiers).
+const matchScore = (product: Product, query: string, tokens: string[]) => {
+  const name = product.name.toLowerCase();
+  const barcodes = product.barcodes ?? [];
+  if (barcodes.some((b) => b.toLowerCase() === query)) return 1000;
+  if (name.startsWith(query)) return 800;
+  const words = name.split(/[\s\-()/,.]+/).filter(Boolean);
+  if (words.some((word) => word.startsWith(query))) return 650;
+  if (name.includes(query)) return 500;
+  if (tokens.length > 1 && tokens.every((token) => name.includes(token))) return 450;
+  if (barcodes.some((b) => b.toLowerCase().includes(query))) return 300;
+  // Typo tolerance: every typed word must be within a typo or two of some word
+  let typos = 0;
+  for (const token of tokens) {
+    const distance = typoDistance(token, words);
+    if (distance === null) return -1;
+    typos += distance;
+  }
+  return 200 - typos * 40;
+};
 
 // Totals are floating point sums, so allow half a centavo when comparing cash to the total.
 const MONEY_TOLERANCE = 0.005;
@@ -576,6 +629,79 @@ const Basket: React.FC = () => {
     });
   }, [setBasket, setSnackbar]);
 
+  // Units sold per product name across all receipts, so predictions favour what sells
+  const unitsSold = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const receipt of salesContext.receipts) {
+      for (const item of receipt.items) map.set(item.name, (map.get(item.name) ?? 0) + item.quantity);
+    }
+    return map;
+  }, [salesContext.receipts]);
+
+  const getPredictions = useCallback(
+    (query: string): Product[] => {
+      const q = query.trim().toLowerCase();
+      if (!q) {
+        return products
+          .filter((product) => (unitsSold.get(product.name) ?? 0) > 0)
+          .sort((a, b) => (unitsSold.get(b.name) ?? 0) - (unitsSold.get(a.name) ?? 0))
+          .slice(0, PREDICTION_LIMIT);
+      }
+      const tokens = q.split(/\s+/).filter(Boolean);
+      const scored: Array<{ product: Product; score: number }> = [];
+      for (const product of products) {
+        const base = matchScore(product, q, tokens);
+        if (base < 0) continue;
+        const popularity = Math.min(40, Math.log2(1 + (unitsSold.get(product.name) ?? 0)) * 8);
+        scored.push({ product, score: base + popularity + (product.quantity > 0 ? 5 : 0) });
+      }
+      scored.sort((a, b) => b.score - a.score || a.product.name.localeCompare(b.product.name));
+      return scored.slice(0, PREDICTION_LIMIT).map((entry) => entry.product);
+    },
+    [products, unitsSold]
+  );
+
+  const renderPrediction = (product: Product, query: string) => {
+    const sold = unitsSold.get(product.name) ?? 0;
+    const inBasket = basketById.get(product.id)?.quantity ?? 0;
+    const q = query.trim().toLowerCase();
+    const barcodeHit = q !== '' && (product.barcodes ?? []).some((b) => b.toLowerCase() === q);
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Box
+          sx={{
+            width: 34,
+            height: 34,
+            flexShrink: 0,
+            borderRadius: '9px',
+            display: 'grid',
+            placeItems: 'center',
+            color: 'primary.main',
+            bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+          }}
+        >
+          {React.cloneElement(getCategoryIcon(product.category), { fontSize: 'small' })}
+        </Box>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography fontWeight={600} noWrap>
+            <Highlight text={product.name} query={query} />
+          </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap component="p">
+            {product.category}
+            {barcodeHit && ' · Barcode match'}
+            {sold > 0 && ` · Sold ${sold.toLocaleString()}×`}
+          </Typography>
+        </Box>
+        <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+          <Typography fontWeight={700}>{formatPeso(product.price)}</Typography>
+          <Typography variant="caption" color={inBasket ? 'primary.main' : product.quantity <= 0 ? 'error.main' : 'text.secondary'} fontWeight={inBasket ? 700 : 400}>
+            {inBasket ? `×${inBasket} in basket` : `Stock: ${product.quantity}`}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  };
+
   const pendingScanProductsRef = useRef<Product[]>([]);
   const pendingScanNotFoundCountRef = useRef(0);
   const pendingScanFlushTimerRef = useRef<number | null>(null);
@@ -1053,24 +1179,39 @@ const Basket: React.FC = () => {
           </Button>
         </Box>
 
-        <TextField
-          fullWidth
-          placeholder="Search by product name or barcode"
+        <PredictField<Product>
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start">
-                <SearchIcon color="action" />
-              </InputAdornment>
-            ),
-            endAdornment: searchQuery ? (
-              <InputAdornment position="end">
-                <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
-                  <CloseIcon fontSize="small" />
-                </IconButton>
-              </InputAdornment>
-            ) : undefined,
+          onChange={setSearchQuery}
+          getOptions={getPredictions}
+          getKey={(product) => product.id}
+          renderOption={renderPrediction}
+          onPick={(product) => {
+            handleAddToBasket(product);
+            setSearchQuery('');
+          }}
+          heading={(query) => (query.trim() ? 'Best matches' : 'Frequently sold')}
+          openWhenEmpty
+          pickLabel="add to basket"
+          textFieldProps={{
+            fullWidth: true,
+            placeholder: 'Search by product name or barcode',
+            onKeyDown: (e) => {
+              if (e.key === 'Escape') setSearchQuery('');
+            },
+            InputProps: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon color="action" />
+                </InputAdornment>
+              ),
+              endAdornment: searchQuery ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                    <CloseIcon fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ) : undefined,
+            },
           }}
         />
 
