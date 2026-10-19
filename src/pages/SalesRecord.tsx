@@ -35,7 +35,7 @@ import {
   PointOfSale as SalesIcon,
   Search as SearchIcon,
 } from '@mui/icons-material';
-import { GrossSalesContext, SaleRecord, SalesContext } from '../App';
+import { GrossSalesContext, ProductsContext, SaleRecord, SalesContext } from '../App';
 import { saveAs } from 'file-saver';
 import ExcelJS from 'exceljs';
 
@@ -46,25 +46,31 @@ type ClearedSalesBatch = {
   sales: SaleRecord[];
 };
 
-type EntryKind = 'sale' | 'unlisted' | 'purchase' | 'load';
-type Filter = 'all' | 'general' | 'store' | 'load';
+type GeneralFilter = 'all' | 'checkout' | 'manual' | 'unlisted';
+type StoreFilter = 'all' | 'cashier' | 'gcash';
+type LoadFilter = 'all' | 'globe' | 'smart';
 
 const CLEARED_SALES_HISTORY_KEY = 'pos_cleared_sales_history';
 const UNLISTED_NAME = 'Unlisted Sales';
 const PAGE_SIZE = 60;
+// Each column only shows a handful of rows at once, so it starts smaller
+const COLUMN_PAGE_SIZE = 40;
+const QUICK_LOAD_AMOUNTS = [10, 20, 50, 100, 300];
 
 const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
 const pad = (value: number) => String(value).padStart(2, '0');
 const dayKeyOf = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
-const dayLabel = (dayKey: string) => {
+const dayLabel = (dayKey: string, short = false) => {
   const [year, month, day] = dayKey.split('-').map(Number);
   const date = new Date(year, month - 1, day);
   const today = new Date();
   const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-  const full = date.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-  if (date.toDateString() === today.toDateString()) return `Today · ${full}`;
-  if (date.toDateString() === yesterday.toDateString()) return `Yesterday · ${full}`;
+  const full = short
+    ? date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })
+    : date.toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  if (date.toDateString() === today.toDateString()) return short ? 'Today' : `Today · ${full}`;
+  if (date.toDateString() === yesterday.toDateString()) return short ? 'Yesterday' : `Yesterday · ${full}`;
   return full;
 };
 
@@ -75,6 +81,8 @@ const loadNetworkOf = (sale: SaleRecord): 'Globe' | 'Smart' | null => {
   return null;
 };
 
+const isUnlisted = (sale: SaleRecord) => sale.items.length === 1 && sale.items[0].name === UNLISTED_NAME;
+
 const describeSale = (sale: SaleRecord) => {
   const items = sale.items;
   if (items.length <= 1) return items[0]?.name ?? '—';
@@ -82,12 +90,15 @@ const describeSale = (sale: SaleRecord) => {
   return items.length > 3 ? `${shown.join(', ')} +${items.length - 3} more` : shown.join(', ');
 };
 
-const typeLabel = (sale: SaleRecord) => {
+// Basket checkouts save a receipt with the same id as the sale, which is how they're told
+// apart from sales typed in by hand.
+const typeLabel = (sale: SaleRecord, checkoutIds?: Set<string>) => {
   if (sale.type === 'store') return sale.paymentMethod === 'gcash' ? 'Purchase · GCash' : 'Purchase · Cashier';
   if (sale.type === 'load') return `Load · ${loadNetworkOf(sale) ?? 'Other'}`;
-  if (sale.items.length === 1 && sale.items[0].name === UNLISTED_NAME) return 'Unlisted sale';
-  if (sale.items.length > 1) return `Checkout · ${sale.items.length} items`;
-  return 'Sale';
+  if (isUnlisted(sale)) return 'Unlisted sale';
+  const count = sale.items.length;
+  if (checkoutIds?.has(sale.id)) return `Checkout · ${count} item${count !== 1 ? 's' : ''}`;
+  return count > 1 ? `Sale · ${count} items` : 'Sale';
 };
 
 // The same figures the old page showed: "Net cash" is general sales minus purchases
@@ -115,6 +126,13 @@ const summarize = (sales: SaleRecord[]) => {
 
 type Summary = ReturnType<typeof summarize>;
 
+const sortNewestFirst = (sales: SaleRecord[]) =>
+  [...sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.id.localeCompare(a.id));
+
+const newSale = (fields: Omit<SaleRecord, 'id' | 'date'>): SaleRecord => ({ id: Date.now().toString(), date: new Date(), ...fields });
+
+const tint = (t: any) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1);
+
 const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: number; caption: string; negative?: boolean }> = ({
   icon,
   label,
@@ -123,18 +141,7 @@ const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: numbe
   negative,
 }) => (
   <Card sx={{ p: 2, display: 'flex', gap: 1.5, alignItems: 'flex-start', minWidth: 0 }}>
-    <Box
-      sx={{
-        width: 40,
-        height: 40,
-        flexShrink: 0,
-        borderRadius: '10px',
-        display: 'grid',
-        placeItems: 'center',
-        color: 'primary.main',
-        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
-      }}
-    >
+    <Box sx={{ width: 40, height: 40, flexShrink: 0, borderRadius: '10px', display: 'grid', placeItems: 'center', color: 'primary.main', bgcolor: tint }}>
       {icon}
     </Box>
     <Box sx={{ minWidth: 0 }}>
@@ -153,181 +160,27 @@ const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: numbe
 
 const SummaryTiles: React.FC<{ summary: Summary }> = ({ summary }) => (
   <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5 }}>
-    <StatTile
-      icon={<SalesIcon />}
-      label="Sales"
-      value={summary.general}
-      caption={`${summary.generalCount} transaction${summary.generalCount !== 1 ? 's' : ''}`}
-    />
+    <StatTile icon={<SalesIcon />} label="Sales" value={summary.general} caption={`${summary.generalCount} transaction${summary.generalCount !== 1 ? 's' : ''}`} />
     <StatTile
       icon={<PurchaseIcon />}
       label="Store purchases"
       value={summary.purchases}
       caption={`Cashier ${formatPeso(summary.cashier)} · GCash ${formatPeso(summary.gcash)}`}
     />
-    <StatTile
-      icon={<CashIcon />}
-      label="Net cash"
-      value={summary.netCash}
-      negative={summary.netCash < 0}
-      caption="Sales minus cashier-paid purchases"
-    />
-    <StatTile
-      icon={<LoadIcon />}
-      label="Load sales"
-      value={summary.load}
-      caption={`Globe ${formatPeso(summary.globe)} · Smart ${formatPeso(summary.smart)}`}
-    />
+    <StatTile icon={<CashIcon />} label="Net cash" value={summary.netCash} negative={summary.netCash < 0} caption="Sales minus cashier-paid purchases" />
+    <StatTile icon={<LoadIcon />} label="Load sales" value={summary.load} caption={`Globe ${formatPeso(summary.globe)} · Smart ${formatPeso(summary.smart)}`} />
   </Box>
 );
 
-const entryButtonLabel: Record<EntryKind, string> = {
-  sale: 'Add sale',
-  unlisted: 'Add unlisted sale',
-  purchase: 'Add purchase',
-  load: 'Add load sale',
-};
-
-const EntryForm: React.FC<{ onAdd: (sale: SaleRecord, label: string) => void }> = ({ onAdd }) => {
-  const [kind, setKind] = useState<EntryKind>('sale');
-  const [name, setName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [payment, setPayment] = useState<'cashier' | 'gcash'>('cashier');
-  const [network, setNetwork] = useState<'globe' | 'smart'>('globe');
-  const [error, setError] = useState<{ name?: string; amount?: string }>({});
-  const firstFieldRef = useRef<HTMLInputElement | null>(null);
-
-  const needsName = kind === 'sale' || kind === 'purchase';
-
-  useEffect(() => {
-    setError({});
-    firstFieldRef.current?.focus();
-  }, [kind]);
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const price = Number(amount);
-    const nextError: typeof error = {};
-    if (needsName && !name.trim()) nextError.name = 'Enter a description';
-    if (!amount || !Number.isFinite(price) || price <= 0) nextError.amount = 'Enter an amount above zero';
-    setError(nextError);
-    if (nextError.name || nextError.amount) return;
-
-    const base = { id: Date.now().toString(), date: new Date(), total: price };
-    let sale: SaleRecord;
-    if (kind === 'sale') {
-      sale = { ...base, items: [{ name: name.trim(), quantity: 1, price }], type: 'general' };
-    } else if (kind === 'unlisted') {
-      sale = { ...base, items: [{ name: UNLISTED_NAME, quantity: 1, price }], type: 'general' };
-    } else if (kind === 'purchase') {
-      sale = { ...base, items: [{ name: name.trim(), quantity: 1, price }], type: 'store', paymentMethod: payment };
-    } else {
-      const label = network === 'globe' ? 'Globe' : 'Smart';
-      sale = { ...base, items: [{ name: `Load (${label})`, quantity: 1, price }], type: 'load' };
-    }
-    onAdd(sale, `${typeLabel(sale)} · ${formatPeso(price)}`);
-    setName('');
-    setAmount('');
-    firstFieldRef.current?.focus();
-  };
-
-  return (
-    <Card sx={{ p: 2 }}>
-      <Typography variant="h6" sx={{ mb: 1.5 }}>
-        Add entry
-      </Typography>
-      <ToggleButtonGroup
-        exclusive
-        fullWidth
-        size="small"
-        color="primary"
-        value={kind}
-        onChange={(_, value: EntryKind | null) => value && setKind(value)}
-        sx={{ mb: 2, '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, py: 0.75 } }}
-      >
-        <ToggleButton value="sale">Sale</ToggleButton>
-        <ToggleButton value="unlisted">Unlisted</ToggleButton>
-        <ToggleButton value="purchase">Purchase</ToggleButton>
-        <ToggleButton value="load">Load</ToggleButton>
-      </ToggleButtonGroup>
-
-      <Box component="form" onSubmit={submit} noValidate sx={{ display: 'grid', gap: 1.5 }}>
-        {kind === 'load' && (
-          <ToggleButtonGroup
-            exclusive
-            fullWidth
-            size="small"
-            color="primary"
-            value={network}
-            onChange={(_, value) => value && setNetwork(value)}
-            sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600 } }}
-          >
-            <ToggleButton value="globe">Globe</ToggleButton>
-            <ToggleButton value="smart">Smart</ToggleButton>
-          </ToggleButtonGroup>
-        )}
-        {needsName && (
-          <TextField
-            inputRef={firstFieldRef}
-            label={kind === 'purchase' ? 'What was bought' : 'Item or description'}
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setError((prev) => ({ ...prev, name: undefined }));
-            }}
-            error={Boolean(error.name)}
-            helperText={error.name}
-            autoComplete="off"
-          />
-        )}
-        <TextField
-          inputRef={needsName ? undefined : firstFieldRef}
-          label="Amount"
-          value={amount}
-          onChange={(e) => {
-            setAmount(e.target.value);
-            setError((prev) => ({ ...prev, amount: undefined }));
-          }}
-          type="number"
-          error={Boolean(error.amount)}
-          helperText={error.amount ?? (kind === 'unlisted' ? `Recorded as “${UNLISTED_NAME}”` : undefined)}
-          inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
-          InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
-        />
-        {kind === 'purchase' && (
-          <Box>
-            <ToggleButtonGroup
-              exclusive
-              fullWidth
-              size="small"
-              color="primary"
-              value={payment}
-              onChange={(_, value) => value && setPayment(value)}
-              sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600 } }}
-            >
-              <ToggleButton value="cashier">Paid from cashier</ToggleButton>
-              <ToggleButton value="gcash">Paid by GCash</ToggleButton>
-            </ToggleButtonGroup>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-              {payment === 'cashier' ? 'Cashier purchases are subtracted from Net cash.' : 'GCash purchases don’t affect Net cash.'}
-            </Typography>
-          </Box>
-        )}
-        <Button type="submit" variant="contained" size="large">
-          {entryButtonLabel[kind]}
-        </Button>
-      </Box>
-    </Card>
-  );
-};
+// ---------- Rows ----------
 
 // Plain elements styled by one shared class, so long lists stay light.
 const RowRoot = styled('div')(({ theme }) => ({
   display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1fr) auto 36px',
+  gridTemplateColumns: 'minmax(0, 1fr) auto 34px',
   alignItems: 'center',
-  columnGap: theme.spacing(1.5),
-  padding: theme.spacing(1, 1, 1, 2),
+  columnGap: theme.spacing(1),
+  padding: theme.spacing(0.75, 0.5, 0.75, 2),
   borderBottom: `1px solid ${theme.palette.divider}`,
   '&:hover': { backgroundColor: theme.palette.action.hover },
   '& .row-time': { ...theme.typography.body2, color: theme.palette.text.secondary, display: 'none' },
@@ -335,34 +188,40 @@ const RowRoot = styled('div')(({ theme }) => ({
   '& .row-title, & .row-meta': { margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   '& .row-title': { ...theme.typography.body2, fontWeight: 600 },
   '& .row-meta': { ...theme.typography.caption, color: theme.palette.text.secondary },
-  '& .row-amount': { ...theme.typography.body1, fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' },
+  '& .row-amount': { ...theme.typography.body2, fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' },
   '& .row-amount[data-out="true"]': { color: theme.palette.text.secondary },
   '& .row-delete': {
     display: 'grid',
     placeItems: 'center',
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     padding: 0,
     border: 0,
-    borderRadius: 10,
+    borderRadius: 8,
     background: 'transparent',
     color: theme.palette.action.active,
     cursor: 'pointer',
-    '&:hover': { backgroundColor: theme.palette.action.hover, color: theme.palette.error.main },
-    '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}` },
+    opacity: 0.6,
+    '&:hover': { backgroundColor: theme.palette.action.hover, color: theme.palette.error.main, opacity: 1 },
+    '&:focus-visible': { outline: `2px solid ${theme.palette.primary.main}`, opacity: 1 },
   },
+  '&:hover .row-delete': { opacity: 1 },
   [theme.breakpoints.up('md')]: {
-    gridTemplateColumns: '76px minmax(0, 1fr) auto 36px',
-    '& .row-time': { display: 'block' },
-    '& .row-time-inline': { display: 'none' },
+    '&[data-wide="true"]': {
+      gridTemplateColumns: '76px minmax(0, 1fr) auto 34px',
+      '& .row-time': { display: 'block' },
+      '& .row-time-inline': { display: 'none' },
+    },
   },
 }));
 
-const SaleRow = React.memo(function SaleRow({ sale, onDelete }: { sale: SaleRecord; onDelete?: (sale: SaleRecord) => void }) {
+type SaleRowProps = { sale: SaleRecord; wide?: boolean; checkoutIds?: Set<string>; onDelete?: (sale: SaleRecord) => void };
+
+const SaleRow = React.memo(function SaleRow({ sale, wide, checkoutIds, onDelete }: SaleRowProps) {
   const time = new Date(sale.date).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' });
   const isPurchase = sale.type === 'store';
   return (
-    <RowRoot>
+    <RowRoot data-wide={Boolean(wide)}>
       <span className="row-time">{time}</span>
       <div className="row-main">
         <p className="row-title" title={sale.items.map((i) => `${i.name} ×${i.quantity}`).join(', ')}>
@@ -370,7 +229,7 @@ const SaleRow = React.memo(function SaleRow({ sale, onDelete }: { sale: SaleReco
         </p>
         <p className="row-meta">
           <span className="row-time-inline">{time} · </span>
-          {typeLabel(sale)}
+          {typeLabel(sale, checkoutIds)}
         </p>
       </div>
       <span className="row-amount" data-out={isPurchase}>
@@ -387,48 +246,55 @@ const SaleRow = React.memo(function SaleRow({ sale, onDelete }: { sale: SaleReco
   );
 });
 
-const DayHeader: React.FC<{ dayKey: string; count: number; total: number; sticky?: boolean }> = ({ dayKey, count, total, sticky }) => (
+const DayHeader: React.FC<{ label: string; detail: React.ReactNode; stickyTop?: number }> = ({ label, detail, stickyTop }) => (
   <Box
     sx={{
-      position: sticky ? 'sticky' : 'static',
-      top: 64,
+      position: stickyTop === undefined ? 'static' : 'sticky',
+      top: stickyTop,
       zIndex: 1,
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'baseline',
-      gap: 2,
+      gap: 1,
       px: 2,
-      py: 1,
+      py: 0.75,
       bgcolor: 'background.default',
       borderBottom: 1,
       borderColor: 'divider',
     }}
   >
-    <Typography variant="subtitle2">{dayLabel(dayKey)}</Typography>
-    <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
-      {count} entr{count !== 1 ? 'ies' : 'y'} · sales <strong>{formatPeso(total)}</strong>
+    <Typography variant="subtitle2" noWrap>
+      {label}
+    </Typography>
+    <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+      {detail}
     </Typography>
   </Box>
 );
 
-// Newest first with a header wherever the day changes; renders `limit` rows.
+// Newest-first rows with a header wherever the day changes; renders `limit` rows.
 const SalesList: React.FC<{
   sales: SaleRecord[];
   limit: number;
+  wide?: boolean;
+  shortDays?: boolean;
+  stickyTop?: number;
+  checkoutIds?: Set<string>;
   onDelete?: (sale: SaleRecord) => void;
-  stickyHeaders?: boolean;
-}> = ({ sales, limit, onDelete, stickyHeaders }) => {
+  // what the day header totals; history shows sales only, a column shows everything in it
+  dayTotalOf?: (sale: SaleRecord) => number;
+}> = ({ sales, limit, wide, shortDays, stickyTop, checkoutIds, onDelete, dayTotalOf = (s) => (s.type === 'general' ? s.total : 0) }) => {
   const dayTotals = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
     for (const sale of sales) {
       const key = dayKeyOf(new Date(sale.date));
       const entry = map.get(key) ?? { count: 0, total: 0 };
       entry.count += 1;
-      if (sale.type === 'general') entry.total += sale.total;
+      entry.total += dayTotalOf(sale);
       map.set(key, entry);
     }
     return map;
-  }, [sales]);
+  }, [sales, dayTotalOf]);
 
   const rows: React.ReactNode[] = [];
   let currentDay = '';
@@ -437,15 +303,360 @@ const SalesList: React.FC<{
     if (key !== currentDay) {
       currentDay = key;
       const totals = dayTotals.get(key) ?? { count: 0, total: 0 };
-      rows.push(<DayHeader key={`day-${key}`} dayKey={key} count={totals.count} total={totals.total} sticky={stickyHeaders} />);
+      rows.push(
+        <DayHeader
+          key={`day-${key}`}
+          label={dayLabel(key, shortDays)}
+          stickyTop={stickyTop}
+          detail={
+            <>
+              {totals.count} · <strong>{formatPeso(totals.total)}</strong>
+            </>
+          }
+        />
+      );
     }
-    rows.push(<SaleRow key={sale.id} sale={sale} onDelete={onDelete} />);
+    rows.push(<SaleRow key={sale.id} sale={sale} wide={wide} checkoutIds={checkoutIds} onDelete={onDelete} />);
   }
   return <>{rows}</>;
 };
 
-const sortNewestFirst = (sales: SaleRecord[]) =>
-  [...sales].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.id.localeCompare(a.id));
+// ---------- Columns ----------
+
+const sumAll = (sale: SaleRecord) => sale.total;
+
+const ColumnList: React.FC<{
+  sales: SaleRecord[];
+  resetKey: string;
+  checkoutIds?: Set<string>;
+  onDelete: (sale: SaleRecord) => void;
+  emptyText: string;
+}> = ({ sales, resetKey, checkoutIds, onDelete, emptyText }) => {
+  const [limit, setLimit] = useState(COLUMN_PAGE_SIZE);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const hasMore = limit < sales.length;
+
+  useEffect(() => {
+    setLimit(COLUMN_PAGE_SIZE);
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [resetKey]);
+
+  // Load the next batch as the end of this column scrolls into view
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setLimit((value) => value + COLUMN_PAGE_SIZE);
+      },
+      { root: scrollRef.current, rootMargin: '400px 0px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, limit]);
+
+  return (
+    <Box ref={scrollRef} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', maxHeight: { xs: 480, lg: 'none' } }}>
+      {sales.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 5, px: 2 }}>
+          {emptyText}
+        </Typography>
+      ) : (
+        <>
+          <SalesList sales={sales} limit={limit} shortDays stickyTop={0} checkoutIds={checkoutIds} onDelete={onDelete} dayTotalOf={sumAll} />
+          {hasMore && (
+            <Box ref={sentinelRef} sx={{ textAlign: 'center', py: 1 }}>
+              <Button size="small" onClick={() => setLimit((value) => value + COLUMN_PAGE_SIZE)}>
+                Show more ({(sales.length - limit).toLocaleString()} remaining)
+              </Button>
+            </Box>
+          )}
+        </>
+      )}
+    </Box>
+  );
+};
+
+type FilterOption = { value: string; label: string; count: number };
+
+const SalesColumn: React.FC<{
+  title: string;
+  icon: React.ReactElement;
+  total: number;
+  caption: React.ReactNode;
+  form: React.ReactNode;
+  filters: FilterOption[];
+  filter: string;
+  onFilter: (value: string) => void;
+  children: React.ReactNode;
+}> = ({ title, icon, total, caption, form, filters, filter, onFilter, children }) => (
+  <Card sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, height: { lg: 'calc(100vh - 232px)' }, minHeight: { lg: 560 } }}>
+    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', p: 2, pb: 1.5 }}>
+      <Box sx={{ width: 40, height: 40, flexShrink: 0, borderRadius: '10px', display: 'grid', placeItems: 'center', color: 'primary.main', bgcolor: tint }}>
+        {icon}
+      </Box>
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography variant="body2" color="text.secondary" fontWeight={600}>
+          {title}
+        </Typography>
+        <Typography variant="h5" component="p" sx={{ lineHeight: 1.25 }}>
+          {formatPeso(total)}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" component="div">
+          {caption}
+        </Typography>
+      </Box>
+    </Box>
+    <Box sx={{ px: 2, py: 1.5, bgcolor: 'background.default', borderTop: 1, borderBottom: 1, borderColor: 'divider' }}>{form}</Box>
+    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+      {filters.map((option) => (
+        <Chip
+          key={option.value}
+          size="small"
+          label={`${option.label} · ${option.count}`}
+          color={filter === option.value ? 'primary' : 'default'}
+          variant={filter === option.value ? 'filled' : 'outlined'}
+          onClick={() => onFilter(option.value)}
+        />
+      ))}
+    </Box>
+    {children}
+  </Card>
+);
+
+const AmountField: React.FC<{
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  inputRef?: React.Ref<HTMLInputElement>;
+}> = ({ value, onChange, error, inputRef }) => (
+  <TextField
+    size="small"
+    label="Amount"
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    type="number"
+    error={Boolean(error)}
+    inputRef={inputRef}
+    inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+    InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+    sx={{ flex: 1, minWidth: 0 }}
+  />
+);
+
+const parseAmount = (value: string) => {
+  const amount = Number(value);
+  return value.trim() !== '' && Number.isFinite(amount) && amount > 0 ? amount : null;
+};
+
+const FormError: React.FC<{ message?: string; hint?: string }> = ({ message, hint }) =>
+  message || hint ? (
+    <Typography variant="caption" color={message ? 'error.main' : 'text.secondary'} sx={{ display: 'block', mt: 0.75 }}>
+      {message ?? hint}
+    </Typography>
+  ) : null;
+
+type AddHandler = (sale: SaleRecord) => void;
+
+// Picking a known name fills in the price when the amount is still empty.
+const useNameWithPrice = (prices: Map<string, number>) => {
+  const [name, setName] = useState('');
+  const [amount, setAmount] = useState('');
+  const changeName = (value: string) => {
+    setName(value);
+    const known = prices.get(value.trim().toLowerCase());
+    if (known !== undefined && amount.trim() === '') setAmount(String(known));
+  };
+  return { name, amount, setName, setAmount, changeName };
+};
+
+const GeneralForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; prices: Map<string, number> }> = ({ onAdd, suggestions, prices }) => {
+  const { name, amount, setName, setAmount, changeName } = useNameWithPrice(prices);
+  const [error, setError] = useState<string>();
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  const unlisted = name.trim() === '';
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const price = parseAmount(amount);
+    if (price === null) return setError('Enter an amount above zero');
+    onAdd(newSale({ items: [{ name: unlisted ? UNLISTED_NAME : name.trim(), quantity: 1, price }], total: price, type: 'general' }));
+    setName('');
+    setAmount('');
+    setError(undefined);
+    nameRef.current?.focus();
+  };
+
+  return (
+    <Box component="form" onSubmit={submit} noValidate>
+      <TextField
+        size="small"
+        fullWidth
+        label="Item name"
+        value={name}
+        inputRef={nameRef}
+        onChange={(e) => changeName(e.target.value)}
+        inputProps={{ list: 'sales-general-suggestions', autoComplete: 'off' }}
+        sx={{ mb: 1 }}
+      />
+      <datalist id="sales-general-suggestions">
+        {suggestions.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <AmountField
+          value={amount}
+          error={error}
+          onChange={(value) => {
+            setAmount(value);
+            setError(undefined);
+          }}
+        />
+        <Button type="submit" variant="contained" sx={{ flexShrink: 0, minWidth: 116 }}>
+          {unlisted ? 'Add unlisted' : 'Add sale'}
+        </Button>
+      </Box>
+      <FormError message={error} hint={unlisted ? `No name? It's saved as “${UNLISTED_NAME}”.` : undefined} />
+    </Box>
+  );
+};
+
+const StoreForm: React.FC<{ onAdd: AddHandler; suggestions: string[]; lastAmounts: Map<string, number> }> = ({ onAdd, suggestions, lastAmounts }) => {
+  const { name, amount, setName, setAmount, changeName } = useNameWithPrice(lastAmounts);
+  const [payment, setPayment] = useState<'cashier' | 'gcash'>('cashier');
+  const [error, setError] = useState<string>();
+  const nameRef = useRef<HTMLInputElement | null>(null);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const price = parseAmount(amount);
+    if (!name.trim()) return setError('Enter what was bought');
+    if (price === null) return setError('Enter an amount above zero');
+    onAdd(newSale({ items: [{ name: name.trim(), quantity: 1, price }], total: price, type: 'store', paymentMethod: payment }));
+    setName('');
+    setAmount('');
+    setError(undefined);
+    nameRef.current?.focus();
+  };
+
+  return (
+    <Box component="form" onSubmit={submit} noValidate>
+      <TextField
+        size="small"
+        fullWidth
+        label="What was bought"
+        value={name}
+        inputRef={nameRef}
+        error={error === 'Enter what was bought'}
+        onChange={(e) => {
+          changeName(e.target.value);
+          setError(undefined);
+        }}
+        inputProps={{ list: 'sales-store-suggestions', autoComplete: 'off' }}
+        sx={{ mb: 1 }}
+      />
+      <datalist id="sales-store-suggestions">
+        {suggestions.map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
+      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+        <AmountField
+          value={amount}
+          error={error === 'Enter an amount above zero' ? error : undefined}
+          onChange={(value) => {
+            setAmount(value);
+            setError(undefined);
+          }}
+        />
+        <Button type="submit" variant="contained" sx={{ flexShrink: 0, minWidth: 116 }}>
+          Add purchase
+        </Button>
+      </Box>
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        size="small"
+        color="primary"
+        value={payment}
+        onChange={(_, value) => value && setPayment(value)}
+        sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, py: 0.5 } }}
+      >
+        <ToggleButton value="cashier">Paid from cashier</ToggleButton>
+        <ToggleButton value="gcash">Paid by GCash</ToggleButton>
+      </ToggleButtonGroup>
+      <FormError message={error} hint={payment === 'cashier' ? 'Cashier purchases come out of Net cash.' : 'GCash purchases don’t affect Net cash.'} />
+    </Box>
+  );
+};
+
+const LoadForm: React.FC<{ onAdd: AddHandler }> = ({ onAdd }) => {
+  const [network, setNetwork] = useState<'Globe' | 'Smart'>('Globe');
+  const [amount, setAmount] = useState('');
+  const [error, setError] = useState<string>();
+  const amountRef = useRef<HTMLInputElement | null>(null);
+
+  const add = (price: number) =>
+    onAdd(newSale({ items: [{ name: `Load (${network})`, quantity: 1, price }], total: price, type: 'load' }));
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const price = parseAmount(amount);
+    if (price === null) return setError('Enter an amount above zero');
+    add(price);
+    setAmount('');
+    setError(undefined);
+    amountRef.current?.focus();
+  };
+
+  return (
+    <Box component="form" onSubmit={submit} noValidate>
+      <ToggleButtonGroup
+        exclusive
+        fullWidth
+        size="small"
+        color="primary"
+        value={network}
+        onChange={(_, value) => {
+          if (!value) return;
+          setNetwork(value);
+          amountRef.current?.focus();
+        }}
+        sx={{ mb: 1, '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, py: 0.5 } }}
+      >
+        <ToggleButton value="Globe">Globe</ToggleButton>
+        <ToggleButton value="Smart">Smart</ToggleButton>
+      </ToggleButtonGroup>
+      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+        <AmountField
+          value={amount}
+          error={error}
+          inputRef={amountRef}
+          onChange={(value) => {
+            setAmount(value);
+            setError(undefined);
+          }}
+        />
+        <Button type="submit" variant="contained" sx={{ flexShrink: 0, minWidth: 116 }}>
+          Add load
+        </Button>
+      </Box>
+      <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ mr: 0.25 }}>
+          Quick add {network}:
+        </Typography>
+        {QUICK_LOAD_AMOUNTS.map((value) => (
+          <Chip key={value} size="small" variant="outlined" label={`+₱${value}`} onClick={() => add(value)} sx={{ bgcolor: 'background.paper' }} />
+        ))}
+      </Box>
+      <FormError message={error} />
+    </Box>
+  );
+};
+
+// ---------- History ----------
 
 const HistoryBatch: React.FC<{
   batch: ClearedSalesBatch;
@@ -520,12 +731,10 @@ const HistoryBatch: React.FC<{
               </Typography>
             ) : (
               <>
-                <SalesList sales={sorted} limit={limit} />
+                <SalesList sales={sorted} limit={limit} wide />
                 {limit < sorted.length && (
                   <Box sx={{ textAlign: 'center', py: 1 }}>
-                    <Button onClick={() => setLimit((value) => value + PAGE_SIZE)}>
-                      Show more ({sorted.length - limit} remaining)
-                    </Button>
+                    <Button onClick={() => setLimit((value) => value + PAGE_SIZE)}>Show more ({sorted.length - limit} remaining)</Button>
                   </Box>
                 )}
               </>
@@ -537,22 +746,27 @@ const HistoryBatch: React.FC<{
   );
 };
 
+// ---------- Page ----------
+
 type Toast = { open: boolean; message: string; severity: 'success' | 'info' | 'error'; undo?: () => void };
 
 const SalesRecord: React.FC = () => {
   const salesContext = useContext(SalesContext);
   const grossSalesContext = useContext(GrossSalesContext);
+  const { products } = useContext(ProductsContext);
   const sales = salesContext.sales;
   const [snackbar, setSnackbar] = useState<Toast>({ open: false, message: '', severity: 'success' });
   const [activeTab, setActiveTab] = useState(0);
-  const [filter, setFilter] = useState<Filter>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [generalFilter, setGeneralFilter] = useState<GeneralFilter>('all');
+  const [storeFilter, setStoreFilter] = useState<StoreFilter>('all');
+  const [loadFilter, setLoadFilter] = useState<LoadFilter>('all');
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [clearAfterExport, setClearAfterExport] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [historyToDelete, setHistoryToDelete] = useState<string[] | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const [clearedSalesHistory, setClearedSalesHistory] = useState<ClearedSalesBatch[]>(() => {
     const stored = localStorage.getItem(CLEARED_SALES_HISTORY_KEY);
@@ -569,6 +783,20 @@ const SalesRecord: React.FC = () => {
     localStorage.setItem(CLEARED_SALES_HISTORY_KEY, JSON.stringify(clearedSalesHistory));
   }, [clearedSalesHistory]);
 
+  // "/" jumps to the search box, Escape clears it
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (e.key === '/' && !typing && activeTab === 0) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeTab]);
+
   const persistSales = useCallback(
     (next: SaleRecord[]) => {
       salesContext.setSales(next);
@@ -577,54 +805,87 @@ const SalesRecord: React.FC = () => {
     [salesContext]
   );
 
+  const checkoutIds = useMemo(() => new Set(salesContext.receipts.map((r) => r.id)), [salesContext.receipts]);
   const summary = useMemo(() => summarize(sales), [sales]);
   const sortedSales = useMemo(() => sortNewestFirst(sales), [sales]);
-
-  const counts = useMemo(() => {
-    const c = { all: sales.length, general: 0, store: 0, load: 0 };
-    for (const sale of sales) c[sale.type] += 1;
-    return c;
-  }, [sales]);
+  const oldestSaleDate = sortedSales.length ? new Date(sortedSales[sortedSales.length - 1].date) : null;
 
   const deferredSearch = useDeferredValue(searchQuery);
   const normalizedSearch = deferredSearch.trim().toLowerCase();
-  const filteredSales = useMemo(
-    () =>
-      sortedSales.filter(
-        (sale) =>
-          (filter === 'all' || sale.type === filter) &&
-          (!normalizedSearch || sale.items.some((item) => item.name.toLowerCase().includes(normalizedSearch)))
-      ),
-    [filter, normalizedSearch, sortedSales]
+  const searched = useMemo(
+    () => (normalizedSearch ? sortedSales.filter((sale) => sale.items.some((item) => item.name.toLowerCase().includes(normalizedSearch))) : sortedSales),
+    [normalizedSearch, sortedSales]
   );
 
-  useEffect(() => {
-    setVisibleCount(PAGE_SIZE);
-  }, [filter, normalizedSearch]);
+  const columns = useMemo(() => {
+    const general: SaleRecord[] = [];
+    const store: SaleRecord[] = [];
+    const load: SaleRecord[] = [];
+    const counts = {
+      general: { all: 0, checkout: 0, manual: 0, unlisted: 0 },
+      store: { all: 0, cashier: 0, gcash: 0 },
+      load: { all: 0, globe: 0, smart: 0 },
+    };
+    for (const sale of searched) {
+      if (sale.type === 'general') {
+        const kind: GeneralFilter = checkoutIds.has(sale.id) ? 'checkout' : isUnlisted(sale) ? 'unlisted' : 'manual';
+        counts.general.all += 1;
+        counts.general[kind] += 1;
+        if (generalFilter === 'all' || generalFilter === kind) general.push(sale);
+      } else if (sale.type === 'store') {
+        const kind: StoreFilter = sale.paymentMethod === 'gcash' ? 'gcash' : 'cashier';
+        counts.store.all += 1;
+        counts.store[kind] += 1;
+        if (storeFilter === 'all' || storeFilter === kind) store.push(sale);
+      } else if (sale.type === 'load') {
+        const network = loadNetworkOf(sale);
+        counts.load.all += 1;
+        if (network === 'Globe') counts.load.globe += 1;
+        if (network === 'Smart') counts.load.smart += 1;
+        if (loadFilter === 'all' || (loadFilter === 'globe' && network === 'Globe') || (loadFilter === 'smart' && network === 'Smart')) load.push(sale);
+      }
+    }
+    return { general, store, load, counts };
+  }, [checkoutIds, generalFilter, loadFilter, searched, storeFilter]);
 
-  const hasMore = visibleCount < filteredSales.length;
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const node = sentinelRef.current;
-    if (!node || !hasMore) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setVisibleCount((count) => count + PAGE_SIZE);
-      },
-      { rootMargin: '600px 0px' }
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [hasMore, visibleCount]);
-
-  const oldestSaleDate = sortedSales.length ? new Date(sortedSales[sortedSales.length - 1].date) : null;
+  // Name suggestions: recent typed-in entries first, then product names; prices fill in on pick
+  const { generalSuggestions, generalPrices, storeSuggestions, storeLastAmounts } = useMemo(() => {
+    const recent = sortNewestFirst([...sales, ...clearedSalesHistory.flatMap((h) => h.sales)]);
+    const generalNames = new Map<string, string>();
+    const storeNames = new Map<string, string>();
+    const prices = new Map<string, number>();
+    const lastAmounts = new Map<string, number>();
+    for (const sale of recent) {
+      if (sale.items.length !== 1 || checkoutIds.has(sale.id)) continue;
+      const name = sale.items[0].name;
+      const key = name.trim().toLowerCase();
+      if (sale.type === 'general' && !isUnlisted(sale) && !name.endsWith('-Paid') && generalNames.size < 40 && !generalNames.has(key)) {
+        generalNames.set(key, name);
+        prices.set(key, sale.total);
+      } else if (sale.type === 'store' && storeNames.size < 40 && !storeNames.has(key)) {
+        storeNames.set(key, name);
+        lastAmounts.set(key, sale.total);
+      }
+    }
+    for (const product of products) {
+      const key = product.name.trim().toLowerCase();
+      if (!generalNames.has(key)) generalNames.set(key, product.name);
+      if (!prices.has(key)) prices.set(key, product.price);
+    }
+    return {
+      generalSuggestions: Array.from(generalNames.values()),
+      generalPrices: prices,
+      storeSuggestions: Array.from(storeNames.values()),
+      storeLastAmounts: lastAmounts,
+    };
+  }, [checkoutIds, clearedSalesHistory, products, sales]);
 
   const handleAdd = useCallback(
-    (sale: SaleRecord, label: string) => {
+    (sale: SaleRecord) => {
       salesContext.addSale(sale);
       setSnackbar({
         open: true,
-        message: `Added ${label}`,
+        message: `Added ${describeSale(sale)} · ${formatPeso(sale.total)}`,
         severity: 'success',
         undo: () => persistSales(JSON.parse(localStorage.getItem('pos_sales') || '[]').filter((s: SaleRecord) => s.id !== sale.id)),
       });
@@ -1016,17 +1277,6 @@ const SalesRecord: React.FC = () => {
 
   const requestDeleteOneHistory = useCallback((batch: ClearedSalesBatch) => setHistoryToDelete([batch.id]), []);
 
-  const filterChip = (value: Filter, label: string) => (
-    <Chip
-      key={value}
-      label={`${label} · ${counts[value]}`}
-      color={filter === value ? 'primary' : 'default'}
-      variant={filter === value ? 'filled' : 'outlined'}
-      onClick={() => setFilter(value)}
-      sx={{ bgcolor: filter === value ? undefined : 'background.paper' }}
-    />
-  );
-
   const historyMonthHeader = (batch: ClearedSalesBatch, index: number) => {
     const label = new Date(batch.clearedAt).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
     const prev = sortedHistory[index - 1];
@@ -1040,23 +1290,50 @@ const SalesRecord: React.FC = () => {
   };
 
   const allHistorySelected = sortedHistory.length > 0 && selectedHistoryIds.length === sortedHistory.length;
+  const { counts } = columns;
+  const searching = normalizedSearch !== '';
 
   return (
     <Box>
       {/* Header */}
-      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 2, mb: 1 }}>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1.5, mb: 1 }}>
         <Box>
           <Typography variant="h5">Sales Record</Typography>
           <Typography variant="body2" color="text.secondary">
             {activeTab === 0
               ? oldestSaleDate
-                ? `Current period since ${oldestSaleDate.toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                ? `Current period since ${oldestSaleDate.toLocaleString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${sales.length} entr${sales.length !== 1 ? 'ies' : 'y'}`
                 : 'No entries in the current period yet'
               : 'Sales that were cleared or exported, kept for reference'}
           </Typography>
         </Box>
         {activeTab === 0 && (
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+            <TextField
+              size="small"
+              placeholder="Search all columns  ( / )"
+              value={searchQuery}
+              inputRef={searchRef}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setSearchQuery('');
+              }}
+              sx={{ width: { xs: '100%', sm: 260 } }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" color="action" />
+                  </InputAdornment>
+                ),
+                endAdornment: searchQuery ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                      <CloseIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : undefined,
+              }}
+            />
             <Button color="error" variant="outlined" onClick={() => setClearDialogOpen(true)} disabled={sales.length === 0}>
               Clear sales
             </Button>
@@ -1080,92 +1357,86 @@ const SalesRecord: React.FC = () => {
       </Tabs>
 
       {activeTab === 0 ? (
-        <>
-          <SummaryTiles summary={summary} />
-
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '340px minmax(0, 1fr)' },
-              gap: 2,
-              mt: 2,
-              alignItems: 'start',
-            }}
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'repeat(3, minmax(0, 1fr))' }, gap: 2, alignItems: 'start' }}>
+          <SalesColumn
+            title="General Sales"
+            icon={<SalesIcon />}
+            total={summary.general}
+            caption={
+              <>
+                {summary.generalCount} transaction{summary.generalCount !== 1 ? 's' : ''} · Net cash{' '}
+                <Box component="strong" sx={{ color: summary.netCash < 0 ? 'error.main' : 'text.primary' }}>
+                  {formatPeso(summary.netCash)}
+                </Box>{' '}
+                after cashier purchases
+              </>
+            }
+            form={<GeneralForm onAdd={handleAdd} suggestions={generalSuggestions} prices={generalPrices} />}
+            filter={generalFilter}
+            onFilter={(value) => setGeneralFilter(value as GeneralFilter)}
+            filters={[
+              { value: 'all', label: 'All', count: counts.general.all },
+              { value: 'checkout', label: 'Checkouts', count: counts.general.checkout },
+              { value: 'manual', label: 'Manual', count: counts.general.manual },
+              { value: 'unlisted', label: 'Unlisted', count: counts.general.unlisted },
+            ]}
           >
-            <Box sx={{ position: { lg: 'sticky' }, top: { lg: 84 } }}>
-              <EntryForm onAdd={handleAdd} />
-            </Box>
+            <ColumnList
+              sales={columns.general}
+              resetKey={`${generalFilter}|${normalizedSearch}`}
+              checkoutIds={checkoutIds}
+              onDelete={handleDeleteSale}
+              emptyText={searching ? 'No sales match your search.' : 'Basket checkouts and sales you add here show up in this list.'}
+            />
+          </SalesColumn>
 
-            <Box sx={{ minWidth: 0 }}>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1.5 }}>
-                {filterChip('all', 'All')}
-                {filterChip('general', 'Sales')}
-                {filterChip('store', 'Purchases')}
-                {filterChip('load', 'Load')}
-                <TextField
-                  size="small"
-                  placeholder="Search items"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  sx={{ ml: { sm: 'auto' }, width: { xs: '100%', sm: 240 } }}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchIcon fontSize="small" color="action" />
-                      </InputAdornment>
-                    ),
-                    endAdornment: searchQuery ? (
-                      <InputAdornment position="end">
-                        <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
-                          <CloseIcon fontSize="small" />
-                        </IconButton>
-                      </InputAdornment>
-                    ) : undefined,
-                  }}
-                />
-              </Box>
+          <SalesColumn
+            title="Store Purchases"
+            icon={<PurchaseIcon />}
+            total={summary.purchases}
+            caption={`Cashier ${formatPeso(summary.cashier)} · GCash ${formatPeso(summary.gcash)}`}
+            form={<StoreForm onAdd={handleAdd} suggestions={storeSuggestions} lastAmounts={storeLastAmounts} />}
+            filter={storeFilter}
+            onFilter={(value) => setStoreFilter(value as StoreFilter)}
+            filters={[
+              { value: 'all', label: 'All', count: counts.store.all },
+              { value: 'cashier', label: 'Cashier', count: counts.store.cashier },
+              { value: 'gcash', label: 'GCash', count: counts.store.gcash },
+            ]}
+          >
+            <ColumnList
+              sales={columns.store}
+              resetKey={`${storeFilter}|${normalizedSearch}`}
+              onDelete={handleDeleteSale}
+              emptyText={searching ? 'No purchases match your search.' : 'Restocks and other things bought for the store go here.'}
+            />
+          </SalesColumn>
 
-              <Card sx={{ overflow: 'visible' }}>
-                {filteredSales.length === 0 ? (
-                  <Box sx={{ textAlign: 'center', py: 7, px: 3 }}>
-                    <SalesIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
-                    <Typography fontWeight={600}>{sales.length === 0 ? 'No entries yet' : 'Nothing matches'}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {sales.length === 0
-                        ? 'Checkouts from the Basket appear here automatically. Use Add entry for anything else.'
-                        : 'Try another filter or search term.'}
-                    </Typography>
-                  </Box>
-                ) : (
-                  <>
-                    <SalesList sales={filteredSales} limit={visibleCount} onDelete={handleDeleteSale} stickyHeaders />
-                    {hasMore && (
-                      <Box ref={sentinelRef} sx={{ textAlign: 'center', py: 1.5 }}>
-                        <Button onClick={() => setVisibleCount((count) => count + PAGE_SIZE)}>
-                          Show more ({(filteredSales.length - visibleCount).toLocaleString()} remaining)
-                        </Button>
-                      </Box>
-                    )}
-                  </>
-                )}
-              </Card>
-            </Box>
-          </Box>
-        </>
+          <SalesColumn
+            title="Load Sales"
+            icon={<LoadIcon />}
+            total={summary.load}
+            caption={`Globe ${formatPeso(summary.globe)} · Smart ${formatPeso(summary.smart)}`}
+            form={<LoadForm onAdd={handleAdd} />}
+            filter={loadFilter}
+            onFilter={(value) => setLoadFilter(value as LoadFilter)}
+            filters={[
+              { value: 'all', label: 'All', count: counts.load.all },
+              { value: 'globe', label: 'Globe', count: counts.load.globe },
+              { value: 'smart', label: 'Smart', count: counts.load.smart },
+            ]}
+          >
+            <ColumnList
+              sales={columns.load}
+              resetKey={`${loadFilter}|${normalizedSearch}`}
+              onDelete={handleDeleteSale}
+              emptyText={searching ? 'No load sales match your search.' : 'Globe and Smart load sales go here.'}
+            />
+          </SalesColumn>
+        </Box>
       ) : (
         <Card>
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              px: 1,
-              py: 1,
-              minHeight: 56,
-              borderBottom: 1,
-              borderColor: 'divider',
-            }}
-          >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 1, minHeight: 56, borderBottom: 1, borderColor: 'divider' }}>
             <Checkbox
               size="small"
               checked={allHistorySelected}
@@ -1175,9 +1446,7 @@ const SalesRecord: React.FC = () => {
               inputProps={{ 'aria-label': 'Select all history records' }}
             />
             <Typography fontWeight={600} sx={{ flex: 1 }}>
-              {selectedHistoryIds.length > 0
-                ? `${selectedHistoryIds.length} selected`
-                : `${sortedHistory.length} record${sortedHistory.length !== 1 ? 's' : ''}`}
+              {selectedHistoryIds.length > 0 ? `${selectedHistoryIds.length} selected` : `${sortedHistory.length} record${sortedHistory.length !== 1 ? 's' : ''}`}
             </Typography>
             {selectedHistoryIds.length > 0 && (
               <Button color="error" variant="contained" startIcon={<DeleteIcon />} onClick={() => setHistoryToDelete(selectedHistoryIds)}>
@@ -1197,12 +1466,7 @@ const SalesRecord: React.FC = () => {
             sortedHistory.map((batch, index) => (
               <React.Fragment key={batch.id}>
                 {historyMonthHeader(batch, index)}
-                <HistoryBatch
-                  batch={batch}
-                  selected={selectedHistoryIds.includes(batch.id)}
-                  onToggle={toggleHistorySelection}
-                  onDelete={requestDeleteOneHistory}
-                />
+                <HistoryBatch batch={batch} selected={selectedHistoryIds.includes(batch.id)} onToggle={toggleHistorySelection} onDelete={requestDeleteOneHistory} />
               </React.Fragment>
             ))
           )}
@@ -1214,8 +1478,8 @@ const SalesRecord: React.FC = () => {
         <DialogTitle>Clear current sales?</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">
-            {sales.length} entr{sales.length !== 1 ? 'ies' : 'y'} ({formatPeso(summary.general)} in sales) will be moved to History and the
-            current period starts fresh. Export first if you need a report.
+            {sales.length} entr{sales.length !== 1 ? 'ies' : 'y'} ({formatPeso(summary.general)} in sales) will be moved to History and the current period
+            starts fresh. Export first if you need a report.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
@@ -1233,16 +1497,22 @@ const SalesRecord: React.FC = () => {
         <DialogTitle>Export sales report</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary" sx={{ mb: 2 }}>
-            Saves an Excel report of the {sales.length} current entr{sales.length !== 1 ? 'ies' : 'y'} and{' '}
-            <strong>adds these totals to Gross Sales</strong>. Exporting the same period twice records it twice.
+            Saves an Excel report of the {sales.length} current entr{sales.length !== 1 ? 'ies' : 'y'} and <strong>adds these totals to Gross Sales</strong>.
+            Exporting the same period twice records it twice.
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 0.5, mb: 2 }}>
-            <Typography variant="body2">Sales</Typography>
-            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.general)}</Typography>
+            <Typography variant="body2">General sales</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>
+              {formatPeso(summary.general)}
+            </Typography>
             <Typography variant="body2">Store purchases</Typography>
-            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.purchases)}</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>
+              {formatPeso(summary.purchases)}
+            </Typography>
             <Typography variant="body2">Load sales</Typography>
-            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>{formatPeso(summary.load)}</Typography>
+            <Typography variant="body2" fontWeight={600} sx={{ textAlign: 'right' }}>
+              {formatPeso(summary.load)}
+            </Typography>
           </Box>
           <FormControlLabel
             control={<Checkbox checked={clearAfterExport} onChange={(e) => setClearAfterExport(e.target.checked)} />}
@@ -1261,11 +1531,11 @@ const SalesRecord: React.FC = () => {
 
       {/* Delete history dialog */}
       <Dialog open={historyToDelete !== null} onClose={() => setHistoryToDelete(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>
-          Delete {historyToDelete?.length === 1 ? 'this record' : `${historyToDelete?.length ?? 0} records`} from History?
-        </DialogTitle>
+        <DialogTitle>Delete {historyToDelete?.length === 1 ? 'this record' : `${historyToDelete?.length ?? 0} records`} from History?</DialogTitle>
         <DialogContent>
-          <Typography color="text.secondary">The cleared sales in {historyToDelete?.length === 1 ? 'it' : 'them'} will be permanently deleted. This cannot be undone.</Typography>
+          <Typography color="text.secondary">
+            The cleared sales in {historyToDelete?.length === 1 ? 'it' : 'them'} will be permanently deleted. This cannot be undone.
+          </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2.5 }}>
           <Button color="inherit" onClick={() => setHistoryToDelete(null)}>
