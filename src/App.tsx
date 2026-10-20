@@ -518,25 +518,22 @@ function App() {
     // Get headers from the first object
     const headers = Object.keys(data[0]);
     
-    // Convert data to CSV format
+    // Quote a field when it holds a comma, quote or line break; inner quotes are doubled
+    const quote = (text: string) => `"${text.replace(/"/g, '""')}"`;
     const csvContent = [
       headers.join(','), // Header row
-      ...data.map(row => 
+      ...data.map(row =>
         headers.map(header => {
           const value = row[header];
-          // Handle arrays (like barcodes)
+          // Arrays (like barcodes) are joined with ';'
           if (Array.isArray(value)) {
-            return `"${value.join(';')}"`;
+            return quote(value.join(';'));
           }
-          // Handle strings that might contain commas
-          if (typeof value === 'string' && value.includes(',')) {
-            return `"${value}"`;
-          }
-          // Handle numbers
           if (typeof value === 'number') {
             return value.toString();
           }
-          return value || '';
+          const text = value == null ? '' : String(value);
+          return /[",\r\n]/.test(text) ? quote(text) : text;
         }).join(',')
       )
     ].join('\n');
@@ -568,8 +565,10 @@ function App() {
 
   const importProducts = async (products: any[]) => {
     try {
-      const newProducts = products.map(row => ({
-        id: row.id || Date.now().toString(),
+      // Rows without an id each get their own, so they stay separate products
+      const stamp = Date.now();
+      const newProducts = products.map((row, index) => ({
+        id: row.id || `${stamp}-${index}`,
         barcodes: Array.isArray(row.barcodes) ? row.barcodes.filter((b: string) => b.trim() !== '') : 
                  (typeof row.barcodes === 'string' && row.barcodes.trim() !== '' ? [row.barcodes] : []),
         name: row.name || '',

@@ -24,41 +24,12 @@ import {
   ShoppingCartOutlined as ShoppingCartIcon,
   Inventory2 as InventoryIcon,
   ArrowBack as ArrowBackIcon,
-  Category as CategoryIcon,
   Search as SearchIcon,
   Print as PrintIcon,
   Close as CloseIcon,
   EditOutlined as EditIcon,
   CheckCircle as CheckCircleIcon,
   QrCodeScanner as ScannerIcon,
-  // Category-specific icons
-  LocalBar as LiquorIcon,
-  Store as BreadIcon,
-  EmojiFoodBeverage as CoffeeIcon,
-  SmokingRooms as CigarettesIcon,
-  Inventory as WholesaleIcon,
-  Fastfood as JunkFoodIcon,
-  Restaurant as CondimentsIcon,
-  Kitchen as IngredientsIcon,
-  Widgets as CanGoodsIcon,
-  CleaningServices as DetergentIcon,
-  DinnerDining as NoodlesIcon,
-  KitchenOutlined as KitchenThingsIcon,
-  LocalLaundryService as LaundryIcon,
-  Face as CosmeticsIcon,
-  Cookie as CookingBakingIcon,
-  LocalCafe as DrinksIcon,
-  ColorLens as DressingsIcon,
-  Cookie as BiscuitsIcon,
-  Opacity as ButterIcon,
-  Spa as FabricConditionerIcon,
-  Cake as CandiesIcon,
-  Favorite as ChocolateIcon,
-  AcUnit as FrozenIcon,
-  Icecream as IceCreamIcon,
-  Soap as ToiletriesIcon,
-  LocalDrink as MilkIcon,
-  Agriculture as CerealsIcon,
 } from '@mui/icons-material';
 import { SalesContext } from '../App';
 import { ProductsContext, Product } from '../App';
@@ -67,6 +38,7 @@ import { GrossSalesContext } from '../App';
 import { usePrinter } from '../contexts/PrinterContext';
 import { BasketItem, useBasket } from '../contexts/BasketContext';
 import PredictField, { Highlight } from '../components/PredictField';
+import { categoryIcon } from '../utils/categoryIcons';
 
 import { useNotify } from '../contexts/NotificationContext';
 const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
@@ -406,135 +378,7 @@ const Basket: React.FC = () => {
     };
   }, [resetInactivityTimer]);
 
-  // Function to get category-specific icon
-  const getCategoryIcon = (categoryName: string) => {
-    // Find the category in the categories array
-    const category = categories.find(cat => cat.name === categoryName);
-    
-    // If category has a stored icon, use it; otherwise fall back to name-based mapping
-    if (category?.icon) {
-      const iconName = category.icon;
-      switch (iconName) {
-        case 'LiquorIcon':
-          return <LiquorIcon />;
-        case 'BreadIcon':
-          return <BreadIcon />;
-        case 'MilkIcon':
-          return <MilkIcon />;
-        case 'CoffeeIcon':
-          return <CoffeeIcon />;
-        case 'CigarettesIcon':
-          return <CigarettesIcon />;
-        case 'WholesaleIcon':
-          return <WholesaleIcon />;
-        case 'JunkFoodIcon':
-          return <JunkFoodIcon />;
-        case 'CondimentsIcon':
-          return <CondimentsIcon />;
-        case 'IngredientsIcon':
-          return <IngredientsIcon />;
-        case 'CanGoodsIcon':
-          return <CanGoodsIcon />;
-        case 'DetergentIcon':
-          return <DetergentIcon />;
-        case 'NoodlesIcon':
-          return <NoodlesIcon />;
-        case 'KitchenThingsIcon':
-          return <KitchenThingsIcon />;
-        case 'LaundryIcon':
-          return <LaundryIcon />;
-        case 'CosmeticsIcon':
-          return <CosmeticsIcon />;
-        case 'CookingBakingIcon':
-          return <CookingBakingIcon />;
-        case 'DrinksIcon':
-          return <DrinksIcon />;
-        case 'CerealsIcon':
-          return <CerealsIcon />;
-        case 'DressingsIcon':
-          return <DressingsIcon />;
-        case 'BiscuitsIcon':
-          return <BiscuitsIcon />;
-        case 'ButterIcon':
-          return <ButterIcon />;
-        case 'FabricConditionerIcon':
-          return <FabricConditionerIcon />;
-        case 'CandiesIcon':
-          return <CandiesIcon />;
-        case 'ChocolateIcon':
-          return <ChocolateIcon />;
-        case 'FrozenIcon':
-          return <FrozenIcon />;
-        case 'IceCreamIcon':
-          return <IceCreamIcon />;
-        case 'ToiletriesIcon':
-          return <ToiletriesIcon />;
-        default:
-          return <CategoryIcon />;
-      }
-    }
-    
-    // Fallback to name-based mapping for backwards compatibility
-    const name = categoryName.toUpperCase();
-    switch (name) {
-      case 'LIQUOR':
-        return <LiquorIcon />;
-      case 'BREAD':
-        return <BreadIcon />;
-      case 'MILK':
-        return <MilkIcon />;
-      case 'COFFEE':
-        return <CoffeeIcon />;
-      case 'CIGARETTES':
-        return <CigarettesIcon />;
-      case 'WHOLE SALE':
-        return <WholesaleIcon />;
-      case 'JUNK FOOD':
-        return <JunkFoodIcon />;
-      case 'CONDIMENTS':
-        return <CondimentsIcon />;
-      case 'INGREDIENTS':
-        return <IngredientsIcon />;
-      case 'CAN GOODS':
-        return <CanGoodsIcon />;
-      case 'DETERGENT':
-        return <DetergentIcon />;
-      case 'NOODLES':
-        return <NoodlesIcon />;
-      case 'KITCHEN THINGS':
-        return <KitchenThingsIcon />;
-      case 'LAUNDRY SOAP':
-        return <LaundryIcon />;
-      case 'COSMETICS':
-        return <CosmeticsIcon />;
-      case 'COOKING AND BAKING':
-        return <CookingBakingIcon />;
-      case 'DRINKS':
-        return <DrinksIcon />;
-      case 'CEREALS':
-        return <CerealsIcon />;
-      case 'DRESSINGS':
-        return <DressingsIcon />;
-      case 'BISCUITS':
-        return <BiscuitsIcon />;
-      case 'BUTTER':
-        return <ButterIcon />;
-      case 'FABRIC CONDITIONER':
-        return <FabricConditionerIcon />;
-      case 'CANDIES':
-        return <CandiesIcon />;
-      case 'CHOCOLATE':
-        return <ChocolateIcon />;
-      case 'FROZEN':
-        return <FrozenIcon />;
-      case 'ICE CREAM':
-        return <IceCreamIcon />;
-      case 'TOILETRIES':
-        return <ToiletriesIcon />;
-      default:
-        return <CategoryIcon />;
-    }
-  };
+  const getCategoryIcon = (categoryName: string) => categoryIcon(categoryName, categories);
 
   const deferredSearchQuery = useDeferredValue(searchQuery);
   const normalizedSearchQuery = useMemo(() => deferredSearchQuery.trim().toLowerCase(), [deferredSearchQuery]);
