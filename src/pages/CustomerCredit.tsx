@@ -1,54 +1,49 @@
-import React, { useState, useContext, useEffect, useRef } from 'react';
+import React, { useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
-  Grid,
-  TextField,
   Button,
   Card,
-  CardContent,
-  Typography,
-  IconButton,
-  Divider,
-  List,
-  ListItem,
-  Snackbar,
-  Alert,
   Chip,
   Dialog,
-  DialogTitle,
-  DialogContent,
   DialogActions,
-  Avatar,
-  Stack,
+  DialogContent,
+  DialogTitle,
+  IconButton,
   InputAdornment,
-  FormControl,
-  InputLabel,
-  Select,
+  ListItemIcon,
+  ListItemText,
+  Menu,
   MenuItem,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
+  Typography,
+  useMediaQuery,
 } from '@mui/material';
+import { alpha, useTheme } from '@mui/material/styles';
 import {
-  AccountBalance as CreditIcon,
   Add as AddIcon,
-  Delete as DeleteIcon,
-  Payment as PaymentIcon,
-  Person as PersonIcon,
-  AttachMoney as MoneyIcon,
-  CalendarToday as CalendarIcon,
-  CheckCircle as PaidIcon,
-  Cancel as UnpaidIcon,
-  TrendingUp as TrendingUpIcon,
-  Assessment as AssessmentIcon,
-  ExpandMore as ExpandMoreIcon,
+  ArrowBack as ArrowBackIcon,
+  CheckCircleRounded as SettledIcon,
+  Close as CloseIcon,
+  DeleteOutline as DeleteIcon,
+  EditOutlined as EditIcon,
+  FileDownloadOutlined as ExportIcon,
+  FileUploadOutlined as ImportIcon,
+  HourglassBottom as OldestIcon,
+  KeyboardArrowDown as ArrowDownIcon,
+  PaymentsOutlined as CollectedIcon,
+  PeopleOutline as PeopleIcon,
+  PersonRemoveOutlined as RemoveCustomerIcon,
+  ReceiptLongOutlined as OutstandingIcon,
   Search as SearchIcon,
-  FilterList as FilterListIcon,
-  FileDownload as ExportIcon,
-  Upload as UploadIcon,
-  Backup as BackupIcon,
-  Edit as EditIcon,
-  CheckCircle as CheckCircleIcon,
+  TableChartOutlined as CsvIcon,
+  DataObject as BackupIcon,
 } from '@mui/icons-material';
-import { SalesContext } from '../App';
+import { SaleRecord, SalesContext } from '../App';
 import { saveAs } from 'file-saver';
+import { useNotify } from '../contexts/NotificationContext';
 
 interface CreditRecord {
   id: string;
@@ -58,1863 +53,1083 @@ interface CreditRecord {
   status: 'paid' | 'unpaid';
 }
 
+type Credits = { [customer: string]: CreditRecord[] };
+type CustomerFilter = 'all' | 'owing' | 'settled';
+type CustomerSort = 'balance' | 'name' | 'recent';
+type RecordTab = 'unpaid' | 'paid' | 'all';
+
+const STORAGE_KEY = 'customerCredits';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const AVATAR_COLORS = ['#0f766e', '#b45309', '#7c3aed', '#be185d', '#1d4ed8', '#15803d', '#c2410c', '#0e7490'];
+
+const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+const formatDate = (date: Date) => date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+const daysSince = (date: Date) => Math.max(0, Math.floor((Date.now() - date.getTime()) / DAY_MS));
+const agoLabel = (days: number) => (days === 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`);
+
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join('') || '?';
+
+const avatarColor = (name: string) => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[hash % AVATAR_COLORS.length];
+};
+
+const parseAmount = (value: string) => {
+  const amount = Number(value);
+  return value.trim() !== '' && Number.isFinite(amount) && amount > 0 ? amount : null;
+};
+
+const reviveCredits = (raw: any): Credits => {
+  const converted: Credits = {};
+  Object.keys(raw).forEach((customer) => {
+    converted[customer] = raw[customer].map((credit: any) => ({ ...credit, date: new Date(credit.date) }));
+  });
+  return converted;
+};
+
+const summarizeCustomer = (records: CreditRecord[]) => {
+  let balance = 0;
+  let unpaidCount = 0;
+  let oldestUnpaid: Date | null = null;
+  let lastActivity: Date | null = null;
+  for (const credit of records) {
+    if (credit.status === 'unpaid') {
+      balance += credit.amount;
+      unpaidCount += 1;
+      if (!oldestUnpaid || credit.date < oldestUnpaid) oldestUnpaid = credit.date;
+    }
+    if (!lastActivity || credit.date > lastActivity) lastActivity = credit.date;
+  }
+  return { balance, unpaidCount, oldestUnpaid, lastActivity, count: records.length };
+};
+
+type CustomerSummary = ReturnType<typeof summarizeCustomer> & { name: string };
+
+// Sales logged by payments are removed again when a payment is undone
+const removeSaleById = (salesContext: React.ContextType<typeof SalesContext>, saleId: string) => {
+  const current: SaleRecord[] = JSON.parse(localStorage.getItem('pos_sales') || '[]');
+  const next = current.filter((sale) => sale.id !== saleId);
+  salesContext.setSales(next);
+  localStorage.setItem('pos_sales', JSON.stringify(next));
+};
+
+const CustomerAvatar: React.FC<{ name: string; size?: number }> = ({ name, size = 40 }) => (
+  <Box
+    aria-hidden
+    sx={{
+      width: size,
+      height: size,
+      flexShrink: 0,
+      borderRadius: '50%',
+      display: 'grid',
+      placeItems: 'center',
+      bgcolor: avatarColor(name),
+      color: '#fff',
+      fontWeight: 700,
+      fontSize: size * 0.38,
+      letterSpacing: '0.02em',
+    }}
+  >
+    {initials(name)}
+  </Box>
+);
+
+const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: string; caption: string; tone?: 'error' | 'success' | 'default' }> = ({
+  icon,
+  label,
+  value,
+  caption,
+  tone = 'default',
+}) => (
+  <Card sx={{ p: 2, display: 'flex', gap: 1.5, alignItems: 'flex-start', minWidth: 0 }}>
+    <Box
+      sx={{
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: '10px',
+        display: 'grid',
+        placeItems: 'center',
+        color: tone === 'default' ? 'primary.main' : `${tone}.main`,
+        bgcolor: (t) => alpha(tone === 'default' ? t.palette.primary.main : t.palette[tone].main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+      }}
+    >
+      {icon}
+    </Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="body2" color="text.secondary" fontWeight={600}>
+        {label}
+      </Typography>
+      <Typography variant="h5" component="p" color={tone === 'error' ? 'error.main' : 'text.primary'} sx={{ lineHeight: 1.3 }} noWrap>
+        {value}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" component="p" noWrap title={caption}>
+        {caption}
+      </Typography>
+    </Box>
+  </Card>
+);
+
 const CustomerCredit: React.FC = () => {
   const salesContext = useContext(SalesContext);
-  
-  const [credits, setCredits] = useState<{ [customer: string]: CreditRecord[] }>({});
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
+  const notify = useNotify();
+  const theme = useTheme();
+  const wide = useMediaQuery(theme.breakpoints.up('lg'));
+
+  const [credits, setCredits] = useState<Credits>({});
+  const [selected, setSelected] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'paid' | 'unpaid'>('all');
-  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
-  const [addCustomerDialog, setAddCustomerDialog] = useState(false);
-  const [customerDetailDialog, setCustomerDetailDialog] = useState<{ open: boolean; customer: string }>({ open: false, customer: '' });
-  const [addCreditDialog, setAddCreditDialog] = useState<{ open: boolean; customer: string }>({ open: false, customer: '' });
-  const [editCreditDialog, setEditCreditDialog] = useState<{ open: boolean; customer: string; credit?: CreditRecord }>({ open: false, customer: '' });
-  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; customer: string; creditId: string } | null>(null);
-  const [payAllDialog, setPayAllDialog] = useState<{ open: boolean; customer: string; totalAmount: number }>({ open: false, customer: '', totalAmount: 0 });
+  const [customerFilter, setCustomerFilter] = useState<CustomerFilter>('all');
+  const [sort, setSort] = useState<CustomerSort>('balance');
+  const [recordTab, setRecordTab] = useState<RecordTab>('unpaid');
+  const [exportMenu, setExportMenu] = useState<HTMLElement | null>(null);
+
+  // quick add on the customer panel
+  const [quickAmount, setQuickAmount] = useState('');
+  const [quickDescription, setQuickDescription] = useState('');
+  const [quickError, setQuickError] = useState<string>();
+  const quickAmountRef = useRef<HTMLInputElement | null>(null);
+
+  // dialogs
+  const [addCustomerOpen, setAddCustomerOpen] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
-  const [newAmount, setNewAmount] = useState('');
-  const [newDescription, setNewDescription] = useState('');
+  const [newCustomerAmount, setNewCustomerAmount] = useState('');
+  const [newCustomerDescription, setNewCustomerDescription] = useState('');
+  const [addCustomerError, setAddCustomerError] = useState<string>();
+  const [editing, setEditing] = useState<{ customer: string; credit: CreditRecord } | null>(null);
+  const [editAmount, setEditAmount] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [collectFor, setCollectFor] = useState<string | null>(null);
+  const [removeCustomer, setRemoveCustomer] = useState<string | null>(null);
+  const [pendingRestore, setPendingRestore] = useState<{ credits: Credits; exportDate?: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load credits from localStorage on component mount
   useEffect(() => {
-    const saved = localStorage.getItem('customerCredits');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        // Convert date strings back to Date objects
-        const converted: { [customer: string]: CreditRecord[] } = {};
-        Object.keys(parsed).forEach(customer => {
-          converted[customer] = parsed[customer].map((credit: any) => ({
-            ...credit,
-            date: new Date(credit.date)
-          }));
-        });
-        setCredits(converted);
-      } catch (error) {
-        console.error('Error loading credits:', error);
-      }
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
+    try {
+      setCredits(reviveCredits(JSON.parse(saved)));
+    } catch (error) {
+      console.error('Error loading credits:', error);
     }
   }, []);
 
-  const saveCredits = (newCredits: { [customer: string]: CreditRecord[] }) => {
-    setCredits(newCredits);
-    localStorage.setItem('customerCredits', JSON.stringify(newCredits));
+  const saveCredits = (next: Credits) => {
+    setCredits(next);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   };
 
-  // New customer workflow handlers
-  const handleAddCustomer = () => {
-    if (!newCustomerName.trim()) {
-      setSnackbar({ open: true, message: 'Customer name is required!', severity: 'error' });
-      return;
-    }
+  // ---------- derived data ----------
 
-    // Check if customer already exists
-    if (credits[newCustomerName.trim()]) {
-      setSnackbar({ open: true, message: 'Customer already exists!', severity: 'error' });
-      return;
-    }
+  const summaries = useMemo<CustomerSummary[]>(
+    () => Object.keys(credits).map((name) => ({ name, ...summarizeCustomer(credits[name]) })),
+    [credits]
+  );
 
-    const updatedCredits = { ...credits };
-    updatedCredits[newCustomerName.trim()] = [];
-    saveCredits(updatedCredits);
-    
-    setSnackbar({ open: true, message: 'Customer added successfully!', severity: 'success' });
+  const stats = useMemo(() => {
+    let outstanding = 0;
+    let collected = 0;
+    let unpaidRecords = 0;
+    let paidRecords = 0;
+    let oldest: { name: string; date: Date } | null = null;
+    for (const s of summaries) {
+      outstanding += s.balance;
+      unpaidRecords += s.unpaidCount;
+      if (s.oldestUnpaid && (!oldest || s.oldestUnpaid < oldest.date)) oldest = { name: s.name, date: s.oldestUnpaid };
+    }
+    for (const records of Object.values(credits)) {
+      for (const credit of records) {
+        if (credit.status === 'paid') {
+          collected += credit.amount;
+          paidRecords += 1;
+        }
+      }
+    }
+    const owing = summaries.filter((s) => s.balance > 0).length;
+    return { outstanding, collected, unpaidRecords, paidRecords, owing, oldest };
+  }, [credits, summaries]);
+
+  const deferredSearch = useDeferredValue(searchQuery);
+  const query = deferredSearch.trim().toLowerCase();
+
+  const counts = useMemo(
+    () => ({
+      all: summaries.length,
+      owing: summaries.filter((s) => s.balance > 0).length,
+      settled: summaries.filter((s) => s.balance === 0).length,
+    }),
+    [summaries]
+  );
+
+  const visibleCustomers = useMemo(() => {
+    const list = summaries.filter((s) => {
+      if (customerFilter === 'owing' && s.balance <= 0) return false;
+      if (customerFilter === 'settled' && s.balance > 0) return false;
+      if (!query) return true;
+      return s.name.toLowerCase().includes(query) || credits[s.name].some((c) => c.description.toLowerCase().includes(query));
+    });
+    list.sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name);
+      if (sort === 'recent') return (b.lastActivity?.getTime() ?? 0) - (a.lastActivity?.getTime() ?? 0);
+      return b.balance - a.balance || a.name.localeCompare(b.name);
+    });
+    return list;
+  }, [credits, customerFilter, query, sort, summaries]);
+
+  // Keep a customer selected on wide screens; drop the selection if it was removed
+  useEffect(() => {
+    if (selected && !credits[selected]) setSelected(null);
+    else if (!selected && wide && visibleCustomers.length > 0) setSelected(visibleCustomers[0].name);
+  }, [credits, selected, visibleCustomers, wide]);
+
+  const selectedSummary = summaries.find((s) => s.name === selected) ?? null;
+  const selectedRecords = useMemo(() => {
+    if (!selected || !credits[selected]) return [];
+    return [...credits[selected]]
+      .filter((c) => recordTab === 'all' || c.status === recordTab)
+      .sort((a, b) => (a.status === b.status ? b.date.getTime() - a.date.getTime() : a.status === 'unpaid' ? -1 : 1));
+  }, [credits, recordTab, selected]);
+
+  const selectCustomer = (name: string) => {
+    setSelected(name);
+    setRecordTab(summarizeCustomer(credits[name]).unpaidCount > 0 ? 'unpaid' : 'all');
+    setQuickAmount('');
+    setQuickDescription('');
+    setQuickError(undefined);
+  };
+
+  // ---------- actions ----------
+
+  const handleAddCustomer = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newCustomerName.trim();
+    if (!name) return setAddCustomerError('Enter the customer’s name');
+    const existing = Object.keys(credits).find((n) => n.toLowerCase() === name.toLowerCase());
+    if (existing) return setAddCustomerError(`“${existing}” is already on the list`);
+    const firstAmount = newCustomerAmount.trim() === '' ? null : parseAmount(newCustomerAmount);
+    if (newCustomerAmount.trim() !== '' && firstAmount === null) return setAddCustomerError('The first credit amount must be above zero');
+
+    const records: CreditRecord[] = firstAmount
+      ? [{ id: Date.now().toString(), date: new Date(), amount: firstAmount, description: newCustomerDescription.trim() || 'Credit purchase', status: 'unpaid' }]
+      : [];
+    saveCredits({ ...credits, [name]: records });
+    setAddCustomerOpen(false);
     setNewCustomerName('');
-    setAddCustomerDialog(false);
+    setNewCustomerAmount('');
+    setNewCustomerDescription('');
+    setAddCustomerError(undefined);
+    setSelected(name);
+    setRecordTab(firstAmount ? 'unpaid' : 'all');
+    notify(firstAmount ? `Added ${name} with ${formatPeso(firstAmount)} on credit` : `Added ${name}`, 'success');
   };
 
-  const handleCustomerCardClick = (customer: string) => {
-    setCustomerDetailDialog({ open: true, customer });
-  };
-
-  const handleToggleCustomerExpand = (customer: string) => {
-    setExpandedCustomer((currentCustomer) =>
-      currentCustomer === customer ? null : customer
-    );
-  };
-
-  const handleAddCreditToCustomer = (customer: string) => {
-    setAddCreditDialog({ open: true, customer });
-    setNewAmount('');
-    setNewDescription('');
-  };
-
-  const handleSaveCreditToCustomer = () => {
-    if (!addCreditDialog.customer || !newAmount || isNaN(Number(newAmount)) || Number(newAmount) <= 0) {
-      setSnackbar({ open: true, message: 'Please fill in all fields with valid data', severity: 'error' });
-      return;
-    }
-
+  const handleQuickAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selected) return;
+    const amount = parseAmount(quickAmount);
+    if (amount === null) return setQuickError('Enter an amount above zero');
     const credit: CreditRecord = {
       id: Date.now().toString(),
       date: new Date(),
-      amount: Number(newAmount),
-      description: newDescription.trim() || 'Credit purchase',
-      status: 'unpaid'
+      amount,
+      description: quickDescription.trim() || 'Credit purchase',
+      status: 'unpaid',
     };
-
-    const updatedCredits = { ...credits };
-    updatedCredits[addCreditDialog.customer].push(credit);
-    
-    saveCredits(updatedCredits);
-    setSnackbar({ open: true, message: 'Credit added successfully!', severity: 'success' });
-    
-    // Reset form
-    setNewAmount('');
-    setNewDescription('');
-    setAddCreditDialog({ open: false, customer: '' });
+    saveCredits({ ...credits, [selected]: [...credits[selected], credit] });
+    setQuickAmount('');
+    setQuickDescription('');
+    setQuickError(undefined);
+    setRecordTab('unpaid');
+    quickAmountRef.current?.focus();
+    notify(`${formatPeso(amount)} added to ${selected}’s credit`, 'success');
   };
 
-  const handleEditCredit = (customer: string, credit: CreditRecord) => {
-    setEditCreditDialog({ open: true, customer, credit });
-    setNewAmount(credit.amount.toString());
-    setNewDescription(credit.description);
+  const openEdit = (customer: string, credit: CreditRecord) => {
+    setEditing({ customer, credit });
+    setEditAmount(String(credit.amount));
+    setEditDescription(credit.description);
   };
 
-  const handleSaveEditedCredit = () => {
-    if (!editCreditDialog.customer || !editCreditDialog.credit || !newAmount || isNaN(Number(newAmount)) || Number(newAmount) <= 0) {
-      setSnackbar({ open: true, message: 'Please fill in all fields with valid data', severity: 'error' });
-      return;
-    }
-
-    const updatedCredits = { ...credits };
-    updatedCredits[editCreditDialog.customer] = updatedCredits[editCreditDialog.customer].map(credit =>
-      credit.id === editCreditDialog.credit!.id 
-        ? { ...credit, amount: Number(newAmount), description: newDescription.trim() || 'Credit purchase' }
-        : credit
-    );
-    
-    saveCredits(updatedCredits);
-    setSnackbar({ open: true, message: 'Credit updated successfully!', severity: 'success' });
-    
-    // Reset form
-    setNewAmount('');
-    setNewDescription('');
-    setEditCreditDialog({ open: false, customer: '' });
-  };
-
-  const handleDeleteCredit = (customer: string, creditId: string) => {
-    setDeleteDialog({ open: true, customer, creditId });
-  };
-
-  const confirmDeleteCredit = () => {
-    if (!deleteDialog) return;
-    
-    const { customer, creditId } = deleteDialog;
-    const updatedCredits = { ...credits };
-    updatedCredits[customer] = updatedCredits[customer].filter(credit => credit.id !== creditId);
-    if (updatedCredits[customer].length === 0) {
-      delete updatedCredits[customer];
-    }
-    saveCredits(updatedCredits);
-    setSnackbar({ open: true, message: 'Credit deleted', severity: 'info' });
-    setDeleteDialog(null);
-  };
-
-  const handleMarkPaid = (customer: string, credit: CreditRecord) => {
-    const updated = { ...credits };
-    updated[customer] = updated[customer].map(c => c.id === credit.id ? { ...c, status: 'paid' } : c);
-    saveCredits(updated);
-    // Log as general sale with CustomerName-Paid
-    salesContext.addSale({
-      id: Date.now().toString(),
-      date: new Date(credit.date),
-      items: [{ name: `${customer}-Paid`, quantity: 1, price: credit.amount }],
-      total: credit.amount,
-      type: 'general',
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editing) return;
+    const amount = parseAmount(editAmount);
+    if (amount === null) return;
+    const { customer, credit } = editing;
+    saveCredits({
+      ...credits,
+      [customer]: credits[customer].map((c) => (c.id === credit.id ? { ...c, amount, description: editDescription.trim() || 'Credit purchase' } : c)),
     });
-    setSnackbar({ open: true, message: 'Marked as paid and logged as general sale.', severity: 'success' });
+    setEditing(null);
+    notify('Credit updated', 'success');
   };
 
-  const handlePayAllCredits = (customer: string) => {
-    const customerCredits = credits[customer];
-    const unpaidCredits = customerCredits.filter(credit => credit.status === 'unpaid');
-    
-    if (unpaidCredits.length === 0) {
-      setSnackbar({ open: true, message: 'No unpaid credits to pay for this customer.', severity: 'info' });
-      return;
-    }
-
-    // Calculate total amount to be paid
-    const totalAmount = unpaidCredits.reduce((sum, credit) => sum + credit.amount, 0);
-    
-    // Show confirmation dialog
-    setPayAllDialog({ open: true, customer, totalAmount });
-  };
-
-  const confirmPayAllCredits = (customer: string) => {
-    const customerCredits = credits[customer];
-    const unpaidCredits = customerCredits.filter(credit => credit.status === 'unpaid');
-    
-    // Mark all unpaid credits as paid
-    const updated = { ...credits };
-    updated[customer] = customerCredits.map(c => c.status === 'unpaid' ? { ...c, status: 'paid' } : c);
-    saveCredits(updated);
-
-    // Calculate total amount paid
-    const totalAmount = unpaidCredits.reduce((sum, credit) => sum + credit.amount, 0);
-
-    // Create combined items list for the sales record
-    const items = unpaidCredits.map(credit => ({
-      name: `${customer}-${credit.description}`,
-      quantity: 1,
-      price: credit.amount
-    }));
-
-    // Log as general sale with all credit items combined
-    salesContext.addSale({
-      id: Date.now().toString(),
-      date: new Date(),
-      items: items,
-      total: totalAmount,
-      type: 'general',
-    });
-
-    setSnackbar({ 
-      open: true, 
-      message: `All credits paid! Total: ₱${totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })} logged as general sale.`, 
-      severity: 'success' 
-    });
-  };
-
-  // Filter and search logic
-  const filteredCustomers = Object.keys(credits).filter(customer => {
-    const customerCredits = credits[customer];
-    const matchesSearch = customer.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      customerCredits.some(credit => credit.description.toLowerCase().includes(searchQuery.toLowerCase()));
-    
-    if (filterStatus === 'all') return matchesSearch;
-    
-    const hasMatchingStatus = customerCredits.some(credit => credit.status === filterStatus);
-    return matchesSearch && hasMatchingStatus;
-  });
-
-  // Calculate totals
-  const calculateCustomerTotal = (customerCredits: CreditRecord[]) => {
-    return customerCredits.reduce((sum, credit) => sum + (credit.status === 'unpaid' ? credit.amount : 0), 0);
-  };
-
-  const calculateOverallStats = () => {
-    let totalUnpaid = 0;
-    let totalPaid = 0;
-    let totalCustomers = 0;
-    let unpaidRecords = 0;
-
-    Object.keys(credits).forEach(customer => {
-      const customerCredits = credits[customer];
-      const hasUnpaid = customerCredits.some(c => c.status === 'unpaid');
-      if (hasUnpaid) totalCustomers++;
-      
-      customerCredits.forEach(credit => {
-        if (credit.status === 'unpaid') {
-          totalUnpaid += credit.amount;
-          unpaidRecords++;
-        } else {
-          totalPaid += credit.amount;
-        }
+  // Deleting the last record keeps the customer; removing a customer is its own action.
+  const handleDeleteCredit = (customer: string, credit: CreditRecord) => {
+    const index = credits[customer].findIndex((c) => c.id === credit.id);
+    saveCredits({ ...credits, [customer]: credits[customer].filter((c) => c.id !== credit.id) });
+    const undo = () => {
+      setCredits((current) => {
+        const list = [...(current[customer] ?? [])];
+        list.splice(Math.min(index, list.length), 0, credit);
+        const next = { ...current, [customer]: list };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return next;
       });
-    });
-
-    return { totalUnpaid, totalPaid, totalCustomers, unpaidRecords };
+    };
+    notify(`Deleted “${credit.description}” (${formatPeso(credit.amount)})`, { severity: 'info', action: { label: 'Undo', onClick: undo } });
   };
 
-  const stats = calculateOverallStats();
+  // Marks credits paid and logs them as a General sale; Undo reverses both.
+  const recordPayment = (customer: string, paid: CreditRecord[], sale: SaleRecord, message: string) => {
+    const paidIds = new Set(paid.map((c) => c.id));
+    saveCredits({ ...credits, [customer]: credits[customer].map((c) => (paidIds.has(c.id) ? { ...c, status: 'paid' } : c)) });
+    salesContext.addSale(sale);
+    const undo = () => {
+      setCredits((current) => {
+        const next = {
+          ...current,
+          [customer]: (current[customer] ?? []).map((c) => (paidIds.has(c.id) ? { ...c, status: 'unpaid' as const } : c)),
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+      removeSaleById(salesContext, sale.id);
+    };
+    notify(message, { severity: 'success', action: { label: 'Undo', onClick: undo } });
+  };
 
-  // Export functions
+  // The sale is dated today, when the money comes in, however old the credit is
+  const handleMarkPaid = (customer: string, credit: CreditRecord) => {
+    recordPayment(
+      customer,
+      [credit],
+      {
+        id: Date.now().toString(),
+        date: new Date(),
+        items: [{ name: `${customer}-Paid`, quantity: 1, price: credit.amount }],
+        total: credit.amount,
+        type: 'general',
+      },
+      `${formatPeso(credit.amount)} from ${customer} recorded as a sale`
+    );
+  };
+
+  const confirmCollectAll = () => {
+    if (!collectFor) return;
+    const customer = collectFor;
+    const unpaid = credits[customer].filter((c) => c.status === 'unpaid');
+    const total = unpaid.reduce((sum, c) => sum + c.amount, 0);
+    recordPayment(
+      customer,
+      unpaid,
+      {
+        id: Date.now().toString(),
+        date: new Date(),
+        items: unpaid.map((c) => ({ name: `${customer}-${c.description}`, quantity: 1, price: c.amount })),
+        total,
+        type: 'general',
+      },
+      `Collected ${formatPeso(total)} from ${customer}`
+    );
+    setCollectFor(null);
+    setRecordTab('all');
+  };
+
+  const confirmRemoveCustomer = () => {
+    if (!removeCustomer) return;
+    const { [removeCustomer]: removed, ...rest } = credits;
+    saveCredits(rest);
+    const name = removeCustomer;
+    setRemoveCustomer(null);
+    const undo = () => {
+      setCredits((current) => {
+        const next = { ...current, [name]: removed };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
+      setSelected(name);
+    };
+    notify(`Removed ${name}`, { severity: 'info', action: { label: 'Undo', onClick: undo } });
+  };
+
+  // ---------- import / export ----------
+
   const handleExportCredits = () => {
+    setExportMenu(null);
     const exportData: string[] = [];
-    
-    Object.keys(credits).forEach(customer => {
-      credits[customer].forEach(credit => {
-        // Format date as YYYY-MM-DD to match the CSV format
+    Object.keys(credits).forEach((customer) => {
+      credits[customer].forEach((credit) => {
         const formattedDate = new Date(credit.date).toISOString().split('T')[0];
         exportData.push(`"${customer}","${credit.description}",${credit.amount},${formattedDate},${credit.status}`);
       });
     });
-
     if (exportData.length === 0) {
-      setSnackbar({ open: true, message: 'No credit data to export', severity: 'warning' });
+      notify('No credit records to export yet', 'warning');
       return;
     }
-
-    // Create CSV content with header
-    const csvContent = [
-      'Customer,Product,Amount,Date,Status', // Header row matching your CSV format
-      ...exportData
-    ].join('\n');
-    
-    const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    saveAs(csvBlob, `customer_credits_${new Date().toISOString().split('T')[0]}.csv`);
-    setSnackbar({ open: true, message: 'Customer credits exported successfully!', severity: 'success' });
+    const csvContent = ['Customer,Product,Amount,Date,Status', ...exportData].join('\n');
+    saveAs(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }), `customer_credits_${new Date().toISOString().split('T')[0]}.csv`);
+    notify('Credit records exported as CSV', 'success');
   };
 
   const handleExportFullBackup = () => {
-    const backupData = {
-      credits,
-      exportDate: new Date().toISOString(),
-      version: '1.0'
-    };
-
-    const jsonStr = JSON.stringify(backupData, null, 2);
-    const dataBlob = new Blob([jsonStr], { type: 'application/json' });
+    setExportMenu(null);
+    const backupData = { credits, exportDate: new Date().toISOString(), version: '1.0' };
+    const dataBlob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     saveAs(dataBlob, `customer_credits_backup_${new Date().toISOString().split('T')[0]}.json`);
-    setSnackbar({ open: true, message: 'Full backup exported successfully!', severity: 'success' });
+    notify('Full backup saved', 'success');
   };
 
   const handleImportCredits = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
 
     if (fileExtension === 'json') {
-      // Handle JSON backup import
+      // A backup replaces everything, so it's confirmed first
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
           const data = JSON.parse(e.target?.result as string);
-          
-          if (data.credits) {
-            // Convert date strings back to Date objects
-            const converted: { [customer: string]: CreditRecord[] } = {};
-            Object.keys(data.credits).forEach(customer => {
-              converted[customer] = data.credits[customer].map((credit: any) => ({
-                ...credit,
-                date: new Date(credit.date)
-              }));
-            });
-            
-            saveCredits(converted);
-            setSnackbar({ open: true, message: 'Credits imported successfully from backup!', severity: 'success' });
-          } else {
-            setSnackbar({ open: true, message: 'Invalid backup file format', severity: 'error' });
-          }
+          if (data.credits) setPendingRestore({ credits: reviveCredits(data.credits), exportDate: data.exportDate });
+          else notify('That file isn’t a credit backup', 'error');
         } catch (error) {
-          setSnackbar({ open: true, message: 'Error importing backup file', severity: 'error' });
+          notify('Couldn’t read the backup file', 'error');
         }
       };
       reader.readAsText(file);
     } else if (fileExtension === 'csv') {
-      // Handle CSV import
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
           const csvText = e.target?.result as string;
-          const lines = csvText.split('\n').map(line => line.trim()).filter(line => line);
-          
+          const lines = csvText.split('\n').map((line) => line.trim()).filter((line) => line);
           if (lines.length === 0) {
-            setSnackbar({ open: true, message: 'CSV file is empty!', severity: 'error' });
+            notify('The CSV file is empty', 'error');
             return;
           }
-          
-          // Check if first line is header (Customer,Product,Amount,Date,Status)
-          const hasHeader = lines[0].toLowerCase().includes('customer') && 
-                           lines[0].toLowerCase().includes('product') && 
-                           lines[0].toLowerCase().includes('amount');
+          const hasHeader =
+            lines[0].toLowerCase().includes('customer') && lines[0].toLowerCase().includes('product') && lines[0].toLowerCase().includes('amount');
           const dataLines = hasHeader ? lines.slice(1) : lines;
-          
-          const importedCredits: { [customer: string]: CreditRecord[] } = {};
+          const importedCredits: Credits = {};
           let importedCount = 0;
-          
           dataLines.forEach((line) => {
-            // Split CSV line, handling quoted values
-            const parts = line.split(',').map(part => part.trim().replace(/^"|"$/g, ''));
-            
+            const parts = line.split(',').map((part) => part.trim().replace(/^"|"$/g, ''));
             if (parts.length >= 5) {
-              const customer = parts[0];
-              const product = parts[1];
-              const amount = Number(parts[2]) || 0;
-              const dateStr = parts[3];
-              const status = parts[4];
-              
+              const [customer, product, amountText, dateStr, status] = parts;
+              const amount = Number(amountText) || 0;
               if (customer && product && amount > 0 && dateStr) {
                 const credit: CreditRecord = {
                   id: Date.now().toString() + Math.random(),
                   date: new Date(dateStr),
-                  amount: amount,
+                  amount,
                   description: product,
-                  status: (status === 'paid' || status === 'unpaid') ? status : 'unpaid'
+                  status: status === 'paid' || status === 'unpaid' ? status : 'unpaid',
                 };
-                
-                if (!importedCredits[customer]) {
-                  importedCredits[customer] = [];
-                }
+                if (!importedCredits[customer]) importedCredits[customer] = [];
                 importedCredits[customer].push(credit);
                 importedCount++;
               }
             }
           });
-          
           if (importedCount > 0) {
-            // Merge with existing credits
             const mergedCredits = { ...credits };
-            Object.keys(importedCredits).forEach(customer => {
-              if (mergedCredits[customer]) {
-                mergedCredits[customer] = [...mergedCredits[customer], ...importedCredits[customer]];
-              } else {
-                mergedCredits[customer] = importedCredits[customer];
-              }
+            Object.keys(importedCredits).forEach((customer) => {
+              mergedCredits[customer] = mergedCredits[customer] ? [...mergedCredits[customer], ...importedCredits[customer]] : importedCredits[customer];
             });
-            
             saveCredits(mergedCredits);
-            setSnackbar({ 
-              open: true, 
-              message: `${importedCount} credit records imported successfully from CSV!`, 
-              severity: 'success' 
-            });
+            notify(`Imported ${importedCount} credit record${importedCount !== 1 ? 's' : ''} from CSV`, 'success');
           } else {
-            setSnackbar({ 
-              open: true, 
-              message: 'No valid credit data found in CSV file', 
-              severity: 'warning' 
-            });
+            notify('No valid credit records found in that CSV', 'warning');
           }
         } catch (error) {
-          setSnackbar({ 
-            open: true, 
-            message: 'Error importing CSV file. Please check file format.', 
-            severity: 'error' 
-          });
+          notify('Couldn’t import that CSV. Check the file format.', 'error');
         }
       };
       reader.readAsText(file);
     } else {
-      setSnackbar({ open: true, message: 'Please select a valid CSV (.csv) or JSON (.json) file', severity: 'error' });
+      notify('Choose a CSV (.csv) or backup (.json) file', 'error');
     }
-
-    // Reset file input
-    if (event.target) {
-      event.target.value = '';
-    }
+    if (event.target) event.target.value = '';
   };
 
-  return (
-    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
-      {/* Modern Header */}
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main', width: 56, height: 56 }}>
-              <CreditIcon sx={{ fontSize: 32 }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} color="primary.main">
-                Customer Credit Management
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Track and manage customer credit accounts
-              </Typography>
-            </Box>
-          </Box>
-          <Stack direction="row" spacing={2}>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,.json"
-              onChange={handleImportCredits}
-              style={{ display: 'none' }}
-            />
-            <Button
-              variant="outlined"
-              startIcon={<UploadIcon />}
-              onClick={() => fileInputRef.current?.click()}
-              sx={{ borderRadius: 3, px: 2 }}
-            >
-              Import
-            </Button>
-            <Button
-              variant="outlined"
-              startIcon={<ExportIcon />}
-              onClick={handleExportCredits}
-              sx={{ borderRadius: 3, px: 2 }}
-            >
-              Export
-            </Button>
-            <Button
-              variant="contained"
-              startIcon={<AddIcon />}
-              onClick={() => setAddCustomerDialog(true)}
-              sx={{ borderRadius: 3, px: 3, fontWeight: 700 }}
-            >
-              Add Customer
-            </Button>
-          </Stack>
-        </Box>
+  const confirmRestore = () => {
+    if (!pendingRestore) return;
+    saveCredits(pendingRestore.credits);
+    setSelected(null);
+    setPendingRestore(null);
+    notify('Backup restored', 'success');
+  };
 
-        {/* Statistics Cards */}
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'error.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <UnpaidIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="error.main">
-                  ₱{stats.totalUnpaid.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Total Unpaid
-                </Typography>
-                <Chip 
-                  label={`${stats.unpaidRecords} records`}
-                  size="small"
-                  color="error"
-                  variant="outlined"
-                  sx={{ mt: 1 }}
-                />
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'success.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <PaidIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="success.main">
-                  ₱{stats.totalPaid.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Total Paid
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'info.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <PersonIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="info.main">
-                  {stats.totalCustomers}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Active Customers
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'warning.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <TrendingUpIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="warning.main">
-                  ₱{(stats.totalUnpaid + stats.totalPaid).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Total Credit
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
+  // ---------- render ----------
+
+  const showList = wide || !selected;
+  const showDetail = wide || Boolean(selected);
+  const collectRecords = collectFor ? credits[collectFor]?.filter((c) => c.status === 'unpaid') ?? [] : [];
+  const collectTotal = collectRecords.reduce((sum, c) => sum + c.amount, 0);
+  const restoreCount = pendingRestore ? Object.keys(pendingRestore.credits).length : 0;
+
+  return (
+    <Box>
+      {/* Header */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1.5, mb: 2 }}>
+        <Box>
+          <Typography variant="h5">Customer Credit</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Track what customers owe and record their payments.
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, '& .MuiButton-root': { whiteSpace: 'nowrap' } }}>
+          <input ref={fileInputRef} type="file" accept=".csv,.json" hidden onChange={handleImportCredits} />
+          <Button variant="outlined" startIcon={<ImportIcon />} onClick={() => fileInputRef.current?.click()}>
+            Import
+          </Button>
+          <Button variant="outlined" startIcon={<ExportIcon />} endIcon={<ArrowDownIcon />} onClick={(e) => setExportMenu(e.currentTarget)}>
+            Export
+          </Button>
+          <Menu anchorEl={exportMenu} open={Boolean(exportMenu)} onClose={() => setExportMenu(null)}>
+            <MenuItem onClick={handleExportCredits}>
+              <ListItemIcon>
+                <CsvIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="CSV for spreadsheets" secondary="Every credit record" />
+            </MenuItem>
+            <MenuItem onClick={handleExportFullBackup}>
+              <ListItemIcon>
+                <BackupIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="Full backup (.json)" secondary="Restore it later with Import" />
+            </MenuItem>
+          </Menu>
+          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddCustomerOpen(true)}>
+            Add customer
+          </Button>
+        </Box>
       </Box>
 
-      {/* Search and Filter Section */}
-      <Card sx={{ borderRadius: 3, boxShadow: 3, mb: 3 }}>
-        <Box sx={{ p: 3 }}>
-          <Typography variant="h6" fontWeight={700} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <FilterListIcon color="primary" />
-            Search & Filter Credits
-          </Typography>
-          <Grid container spacing={3} alignItems="center">
-            <Grid item xs={12} md={6}>
+      {/* Summary; on a phone it steps aside while a customer's account is open */}
+      <Box
+        sx={{
+          display: showList ? 'grid' : 'none',
+          gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' },
+          gap: 1.5,
+          mb: 2,
+        }}
+      >
+        <StatTile
+          icon={<OutstandingIcon />}
+          label="Outstanding"
+          value={formatPeso(stats.outstanding)}
+          caption={`${stats.unpaidRecords} unpaid record${stats.unpaidRecords !== 1 ? 's' : ''}`}
+          tone={stats.outstanding > 0 ? 'error' : 'default'}
+        />
+        <StatTile icon={<PeopleIcon />} label="Customers owing" value={String(stats.owing)} caption={`of ${summaries.length} customer${summaries.length !== 1 ? 's' : ''}`} />
+        <StatTile
+          icon={<CollectedIcon />}
+          label="Collected"
+          value={formatPeso(stats.collected)}
+          caption={`${stats.paidRecords} paid record${stats.paidRecords !== 1 ? 's' : ''}`}
+          tone="success"
+        />
+        <StatTile
+          icon={<OldestIcon />}
+          label="Oldest unpaid"
+          value={stats.oldest ? (daysSince(stats.oldest.date) === 0 ? 'Today' : `${daysSince(stats.oldest.date)} days`) : '—'}
+          caption={stats.oldest ? `${stats.oldest.name} · since ${formatDate(stats.oldest.date)}` : 'Nobody owes anything'}
+        />
+      </Box>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: '380px minmax(0, 1fr)' }, gap: 2, alignItems: 'start' }}>
+        {/* Customer list */}
+        {showList && (
+          <Card sx={{ display: 'flex', flexDirection: 'column', height: { lg: 'calc(100vh - 290px)' }, minHeight: { lg: 480 } }}>
+            <Box sx={{ p: 1.5, borderBottom: 1, borderColor: 'divider', display: 'grid', gap: 1 }}>
               <TextField
-                fullWidth
-                placeholder="Search by customer name or description..."
+                size="small"
+                placeholder="Search customers or items"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <SearchIcon color="action" />
+                      <SearchIcon fontSize="small" color="action" />
                     </InputAdornment>
                   ),
-                }}
-                sx={{ 
-                  '& .MuiOutlinedInput-root': { borderRadius: 3 }
+                  endAdornment: searchQuery ? (
+                    <InputAdornment position="end">
+                      <IconButton size="small" aria-label="Clear search" onClick={() => setSearchQuery('')}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ) : undefined,
                 }}
               />
-            </Grid>
-            <Grid item xs={12} md={4}>
-              <FormControl fullWidth>
-                <InputLabel>Filter by Status</InputLabel>
-                <Select
-                  value={filterStatus}
-                  label="Filter by Status"
-                  onChange={(e) => setFilterStatus(e.target.value as any)}
-                  sx={{ borderRadius: 3 }}
-                >
-                  <MenuItem value="all">
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <AssessmentIcon />
-                      <Typography>All Status</Typography>
-                    </Box>
-                  </MenuItem>
-                  <MenuItem value="unpaid">
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <UnpaidIcon />
-                      <Typography>Unpaid</Typography>
-                    </Box>
-                  </MenuItem>
-                  <MenuItem value="paid">
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <PaidIcon />
-                      <Typography>Paid</Typography>
-                    </Box>
-                  </MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} md={2}>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                <Chip
-                  label={filterStatus === 'all' ? 'All' : filterStatus}
-                  color="primary"
-                  variant="filled"
-                  sx={{ fontWeight: 700 }}
-                />
-                {filteredCustomers.length > 0 && (
+              <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
+                {(
+                  [
+                    ['all', 'All'],
+                    ['owing', 'Owing'],
+                    ['settled', 'Settled'],
+                  ] as const
+                ).map(([value, label]) => (
                   <Chip
-                    label={`${filteredCustomers.length} found`}
-                    color="secondary"
-                    variant="outlined"
+                    key={value}
                     size="small"
+                    label={`${label} · ${counts[value]}`}
+                    color={customerFilter === value ? 'primary' : 'default'}
+                    variant={customerFilter === value ? 'filled' : 'outlined'}
+                    onClick={() => setCustomerFilter(value)}
                   />
-                )}
+                ))}
+                <TextField
+                  select
+                  size="small"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as CustomerSort)}
+                  aria-label="Sort customers"
+                  sx={{ ml: 'auto', '& .MuiSelect-select': { py: 0.5, fontSize: '0.8125rem' } }}
+                >
+                  <MenuItem value="balance">Highest balance</MenuItem>
+                  <MenuItem value="recent">Most recent</MenuItem>
+                  <MenuItem value="name">Name A–Z</MenuItem>
+                </TextField>
               </Box>
-            </Grid>
-          </Grid>
-        </Box>
-      </Card>
+            </Box>
 
-      {/* Data Management Section */}
-      <Card sx={{ borderRadius: 3, boxShadow: 3, mb: 3 }}>
-        <Box sx={{ p: 3 }}>
-          <Typography variant="h6" fontWeight={700} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <BackupIcon color="primary" />
-            Data Management
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-            Export, import, and backup your customer credit data
-          </Typography>
-          
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={4}>
-              <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'success.200', bgcolor: 'success.50' }}>
-                <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                  <Avatar sx={{ bgcolor: 'success.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                    <ExportIcon />
-                  </Avatar>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    Export to CSV
+            <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', maxHeight: { xs: 520, lg: 'none' } }} role="listbox" aria-label="Customers">
+              {visibleCustomers.length === 0 ? (
+                <Box sx={{ textAlign: 'center', py: 6, px: 3 }}>
+                  <PeopleIcon sx={{ fontSize: 40, color: 'text.disabled', mb: 1 }} />
+                  <Typography fontWeight={600}>{summaries.length === 0 ? 'No customers yet' : 'Nobody matches'}</Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    {summaries.length === 0 ? 'Add a customer to start tracking credit.' : 'Try another search or filter.'}
                   </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                    Download detailed credit records in CSV format
-                  </Typography>
+                  {summaries.length === 0 && (
+                    <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddCustomerOpen(true)}>
+                      Add customer
+                    </Button>
+                  )}
+                </Box>
+              ) : (
+                visibleCustomers.map((s) => {
+                  const isSelected = s.name === selected;
+                  return (
+                    <Box
+                      key={s.name}
+                      role="option"
+                      aria-selected={isSelected}
+                      tabIndex={0}
+                      onClick={() => selectCustomer(s.name)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          selectCustomer(s.name);
+                        }
+                      }}
+                      sx={{
+                        position: 'relative',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                        px: 2,
+                        py: 1.25,
+                        cursor: 'pointer',
+                        borderBottom: 1,
+                        borderColor: 'divider',
+                        bgcolor: isSelected ? (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.14 : 0.07) : 'transparent',
+                        '&:hover': { bgcolor: isSelected ? undefined : 'action.hover' },
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          left: 0,
+                          top: 8,
+                          bottom: 8,
+                          width: 3,
+                          borderRadius: 3,
+                          bgcolor: isSelected ? 'primary.main' : 'transparent',
+                        },
+                        '&:focus-visible': { outline: 2, outlineStyle: 'solid', outlineColor: 'primary.main', outlineOffset: -2 },
+                      }}
+                    >
+                      <CustomerAvatar name={s.name} />
+                      <Box sx={{ minWidth: 0, flex: 1 }}>
+                        <Typography fontWeight={600} noWrap>
+                          {s.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap component="p">
+                          {s.unpaidCount > 0
+                            ? `${s.unpaidCount} unpaid · oldest ${agoLabel(daysSince(s.oldestUnpaid!))}`
+                            : s.count > 0
+                              ? `All paid · ${s.count} record${s.count !== 1 ? 's' : ''}`
+                              : 'No credit yet'}
+                        </Typography>
+                      </Box>
+                      {s.balance > 0 ? (
+                        <Typography fontWeight={700} color="error.main" sx={{ whiteSpace: 'nowrap' }}>
+                          {formatPeso(s.balance)}
+                        </Typography>
+                      ) : (
+                        <Chip size="small" icon={<SettledIcon />} label="Settled" color="success" variant="outlined" />
+                      )}
+                    </Box>
+                  );
+                })
+              )}
+            </Box>
+          </Card>
+        )}
+
+        {/* Customer account */}
+        {showDetail && (
+          <Card sx={{ minWidth: 0 }}>
+            {!selectedSummary ? (
+              <Box sx={{ textAlign: 'center', py: 10, px: 3 }}>
+                <PeopleIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
+                <Typography fontWeight={600}>Pick a customer</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Their credit and payments show up here.
+                </Typography>
+              </Box>
+            ) : (
+              <>
+                <Box sx={{ p: 2.5, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 2, borderBottom: 1, borderColor: 'divider' }}>
+                  {!wide && (
+                    <IconButton aria-label="Back to customers" onClick={() => setSelected(null)} edge="start">
+                      <ArrowBackIcon />
+                    </IconButton>
+                  )}
+                  <CustomerAvatar name={selectedSummary.name} size={52} />
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Typography variant="h5" sx={{ overflowWrap: 'anywhere' }}>
+                      {selectedSummary.name}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {selectedSummary.count} record{selectedSummary.count !== 1 ? 's' : ''}
+                      {selectedSummary.lastActivity && ` · last activity ${formatDate(selectedSummary.lastActivity)}`}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ textAlign: { xs: 'left', sm: 'right' }, width: { xs: '100%', sm: 'auto' } }}>
+                    <Typography variant="overline" color="text.secondary" component="p" sx={{ lineHeight: 1.5 }}>
+                      Balance
+                    </Typography>
+                    <Typography variant="h4" component="p" color={selectedSummary.balance > 0 ? 'error.main' : 'success.main'}>
+                      {formatPeso(selectedSummary.balance)}
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <Box sx={{ px: 2.5, py: 2, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
                   <Button
                     variant="contained"
                     color="success"
-                    startIcon={<ExportIcon />}
-                    onClick={handleExportCredits}
-                    fullWidth
-                    sx={{ borderRadius: 3 }}
-                    disabled={Object.keys(credits).length === 0}
+                    disabled={selectedSummary.balance <= 0}
+                    onClick={() => setCollectFor(selectedSummary.name)}
                   >
-                    Export Credits
+                    {selectedSummary.balance > 0 ? `Collect ${formatPeso(selectedSummary.balance)}` : 'Nothing to collect'}
                   </Button>
-                </CardContent>
-              </Card>
-            </Grid>
-            
-            <Grid item xs={12} md={4}>
-              <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'info.200', bgcolor: 'info.50' }}>
-                <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                  <Avatar sx={{ bgcolor: 'info.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                    <BackupIcon />
-                  </Avatar>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    Full Backup
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                    Create complete backup with all credit data
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    color="info"
-                    startIcon={<BackupIcon />}
-                    onClick={handleExportFullBackup}
-                    fullWidth
-                    sx={{ borderRadius: 3 }}
-                    disabled={Object.keys(credits).length === 0}
-                  >
-                    Create Backup
-                  </Button>
-                </CardContent>
-              </Card>
-            </Grid>
-            
-            <Grid item xs={12} md={4}>
-              <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'warning.200', bgcolor: 'warning.50' }}>
-                <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                  <Avatar sx={{ bgcolor: 'warning.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                    <UploadIcon />
-                  </Avatar>
-                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                    Import Data
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                    Import from CSV or restore from backup
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    color="warning"
-                    startIcon={<UploadIcon />}
-                    onClick={() => fileInputRef.current?.click()}
-                    fullWidth
-                    sx={{ borderRadius: 3 }}
-                  >
-                    Import Credits
-                  </Button>
-                </CardContent>
-              </Card>
-            </Grid>
-          </Grid>
-          
-          <Box sx={{ mt: 3, p: 2, borderRadius: 2, bgcolor: 'grey.100' }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              <strong>Supported formats:</strong>
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • <strong>CSV (.csv):</strong> Spreadsheet format with columns: Customer, Product, Amount, Date, Status
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              • <strong>JSON (.json):</strong> Full backup format for complete data restoration
-            </Typography>
-          </Box>
-        </Box>
-      </Card>
+                  <Box sx={{ flex: 1 }} />
+                  <Tooltip title="Remove customer">
+                    <IconButton aria-label={`Remove ${selectedSummary.name}`} onClick={() => setRemoveCustomer(selectedSummary.name)}>
+                      <RemoveCustomerIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
 
-      {/* Customer Credits Display */}
-      <Box>
-        {filteredCustomers.length === 0 ? (
-          <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-            <CardContent sx={{ p: 6, textAlign: 'center' }}>
-              <Avatar sx={{ bgcolor: 'grey.100', width: 80, height: 80, mx: 'auto', mb: 3 }}>
-                <CreditIcon sx={{ fontSize: 40, color: 'grey.500' }} />
-              </Avatar>
-              <Typography variant="h5" fontWeight={700} gutterBottom color="text.secondary">
-                No Customer Credits Found
-              </Typography>
-              <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
-                {searchQuery || filterStatus !== 'all' 
-                  ? 'Try adjusting your search or filter criteria'
-                  : 'Start by adding your first customer credit record'
-                }
-              </Typography>
-              {(searchQuery || filterStatus !== 'all') ? (
-                <Button 
-                  variant="outlined" 
-                  onClick={() => { setSearchQuery(''); setFilterStatus('all'); }}
-                  sx={{ borderRadius: 3 }}
+                {/* Quick add */}
+                <Box
+                  component="form"
+                  onSubmit={handleQuickAdd}
+                  noValidate
+                  sx={{ px: 2.5, py: 2, bgcolor: 'background.default', borderBottom: 1, borderColor: 'divider' }}
                 >
-                  Clear Filters
-                </Button>
-              ) : (
-                <Button 
-                  variant="contained" 
-                  startIcon={<AddIcon />}
-                  onClick={() => setAddCustomerDialog(true)}
-                  sx={{ borderRadius: 3 }}
-                >
-                  Add First Credit
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          <Grid container spacing={3}>
-            {filteredCustomers.map((customer) => {
-              const customerCredits = credits[customer];
-              const filteredCredits = filterStatus === 'all' 
-                ? customerCredits 
-                : customerCredits.filter(credit => credit.status === filterStatus);
-              const totalUnpaid = calculateCustomerTotal(customerCredits);
-              const isExpanded = expandedCustomer === customer;
-
-              return (
-                <Grid item xs={12} key={customer}>
-                  <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-                    <Box 
-                      sx={{ 
-                        p: 3, 
-                        borderBottom: '1px solid', 
-                        borderColor: 'divider',
-                        bgcolor: totalUnpaid > 0 ? 'error.50' : 'success.50',
-                        cursor: 'pointer'
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Add credit
+                  </Typography>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '160px minmax(0, 1fr) auto' }, gap: 1 }}>
+                    <TextField
+                      size="small"
+                      label="Amount"
+                      type="number"
+                      value={quickAmount}
+                      inputRef={quickAmountRef}
+                      error={Boolean(quickError)}
+                      onChange={(e) => {
+                        setQuickAmount(e.target.value);
+                        setQuickError(undefined);
                       }}
-                      onClick={() => handleCustomerCardClick(customer)}
-                    >
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                          <Avatar sx={{ bgcolor: totalUnpaid > 0 ? 'error.main' : 'success.main', width: 50, height: 50 }}>
-                            <PersonIcon sx={{ fontSize: 28 }} />
-                          </Avatar>
-                          <Box>
-                            <Typography variant="h6" fontWeight={700}>
-                              {customer}
+                      inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+                      InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+                    />
+                    <TextField
+                      size="small"
+                      label="What was taken (optional)"
+                      value={quickDescription}
+                      onChange={(e) => setQuickDescription(e.target.value)}
+                    />
+                    <Button type="submit" variant="contained" startIcon={<AddIcon />}>
+                      Add
+                    </Button>
+                  </Box>
+                  {quickError && (
+                    <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.75 }}>
+                      {quickError}
+                    </Typography>
+                  )}
+                </Box>
+
+                {/* Records */}
+                <Box sx={{ px: 2.5, pt: 2, pb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    color="primary"
+                    value={recordTab}
+                    onChange={(_, value: RecordTab | null) => value && setRecordTab(value)}
+                    sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, px: 1.5, py: 0.5 } }}
+                  >
+                    <ToggleButton value="unpaid">Unpaid · {selectedSummary.unpaidCount}</ToggleButton>
+                    <ToggleButton value="paid">Paid · {selectedSummary.count - selectedSummary.unpaidCount}</ToggleButton>
+                    <ToggleButton value="all">All · {selectedSummary.count}</ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+                <Box>
+                  {selectedRecords.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 5, px: 2 }}>
+                      {recordTab === 'unpaid' ? 'Nothing unpaid. All settled.' : recordTab === 'paid' ? 'No payments yet.' : 'No credit records yet.'}
+                    </Typography>
+                  ) : (
+                    selectedRecords.map((credit) => {
+                      const unpaid = credit.status === 'unpaid';
+                      const days = daysSince(credit.date);
+                      return (
+                        <Box
+                          key={credit.id}
+                          sx={{
+                            display: 'grid',
+                            gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', sm: 'minmax(0, 1fr) auto auto' },
+                            alignItems: 'center',
+                            columnGap: 1.5,
+                            rowGap: 1,
+                            px: 2.5,
+                            py: 1.25,
+                            borderTop: 1,
+                            borderColor: 'divider',
+                            '&:hover': { bgcolor: 'action.hover' },
+                          }}
+                        >
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography fontWeight={600} noWrap title={credit.description}>
+                              {credit.description}
                             </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              {customerCredits.length} credit record{customerCredits.length !== 1 ? 's' : ''}
+                            <Typography variant="caption" color="text.secondary" component="p">
+                              {formatDate(credit.date)}
+                              {unpaid ? (
+                                <Box component="span" sx={{ color: days >= 30 ? 'error.main' : days >= 7 ? 'warning.main' : 'text.secondary', fontWeight: days >= 7 ? 700 : 400 }}>
+                                  {' · '}unpaid {agoLabel(days)}
+                                </Box>
+                              ) : (
+                                ' · paid'
+                              )}
                             </Typography>
                           </Box>
+                          <Typography fontWeight={700} color={unpaid ? 'error.main' : 'text.secondary'} sx={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            {formatPeso(credit.amount)}
+                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, gridColumn: { xs: '1 / -1', sm: 'auto' } }}>
+                            {unpaid ? (
+                              <Button size="small" variant="outlined" color="success" onClick={() => handleMarkPaid(selectedSummary.name, credit)}>
+                                Mark paid
+                              </Button>
+                            ) : (
+                              <Chip size="small" icon={<SettledIcon />} label="Paid" color="success" variant="outlined" />
+                            )}
+                            <Tooltip title="Edit">
+                              <IconButton size="small" aria-label={`Edit ${credit.description}`} onClick={() => openEdit(selectedSummary.name, credit)}>
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Delete">
+                              <IconButton size="small" aria-label={`Delete ${credit.description}`} onClick={() => handleDeleteCredit(selectedSummary.name, credit)}>
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
                         </Box>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                          {totalUnpaid > 0 ? (
-                            <Chip 
-                              label={`₱${totalUnpaid.toLocaleString('en-PH', { minimumFractionDigits: 2 })} unpaid`}
-                              color="error"
-                              variant="filled"
-                              icon={<MoneyIcon />}
-                              sx={{ fontWeight: 700 }}
-                            />
-                          ) : (
-                            <Chip 
-                              label="All Paid"
-                              color="success"
-                              variant="filled"
-                              icon={<PaidIcon />}
-                              sx={{ fontWeight: 700 }}
-                            />
-                          )}
-                          <IconButton
-                            size="small"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleToggleCustomerExpand(customer);
-                            }}
-                            sx={{ color: 'text.secondary' }}
-                          >
-                            <ExpandMoreIcon 
-                              sx={{ 
-                                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                                transition: 'transform 0.3s'
-                              }}
-                            />
-                          </IconButton>
-                        </Box>
-                      </Box>
-                    </Box>
-                    
-                    {isExpanded && (
-                      <Box sx={{ p: 3 }}>
-                        <List>
-                          {filteredCredits.map((credit, index) => (
-                            <ListItem key={credit.id} sx={{ px: 0, py: 2 }}>
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                                <Box sx={{ flex: 1 }}>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                                    <Typography variant="body1" fontWeight={600}>
-                                      {credit.description}
-                                    </Typography>
-                                    <Chip 
-                                      label={credit.status.toUpperCase()}
-                                      color={credit.status === 'paid' ? 'success' : 'error'}
-                                      size="small"
-                                      icon={credit.status === 'paid' ? <PaidIcon /> : <UnpaidIcon />}
-                                    />
-                                  </Box>
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                                    <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                      <CalendarIcon sx={{ fontSize: 16 }} />
-                                      {new Date(credit.date).toLocaleDateString()}
-                                    </Typography>
-                                    <Typography variant="h6" fontWeight={700} color={credit.status === 'paid' ? 'success.main' : 'error.main'}>
-                                      ₱{credit.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                                    </Typography>
-                                  </Box>
-                                </Box>
-                                <Stack direction="row" spacing={1}>
-                                  {credit.status === 'unpaid' && (
-                                    <Button
-                                      size="small"
-                                      variant="contained"
-                                      color="success"
-                                      startIcon={<PaymentIcon />}
-                                      onClick={() => handleMarkPaid(customer, credit)}
-                                      sx={{ borderRadius: 2 }}
-                                    >
-                                      Mark Paid
-                                    </Button>
-                                  )}
-                                  <IconButton
-                                    size="small"
-                                    color="error"
-                                    onClick={() => handleDeleteCredit(customer, credit.id)}
-                                    sx={{ border: '1px solid', borderColor: 'error.main', borderRadius: 2 }}
-                                  >
-                                    <DeleteIcon fontSize="small" />
-                                  </IconButton>
-                                </Stack>
-                              </Box>
-                              {index < filteredCredits.length - 1 && <Divider sx={{ mt: 2 }} />}
-                            </ListItem>
-                          ))}
-                        </List>
-                      </Box>
-                    )}
-                  </Card>
-                </Grid>
-              );
-            })}
-          </Grid>
+                      );
+                    })
+                  )}
+                </Box>
+              </>
+            )}
+          </Card>
         )}
       </Box>
 
-      {/* Add Customer Dialog */}
-      <Dialog
-        open={addCustomerDialog}
-        onClose={() => setAddCustomerDialog(false)}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{ 
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          } 
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            bgcolor: 'banner.main',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative circles */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -20,
-              right: -20,
-              width: 100,
-              height: 100,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          <Box
-            sx={{
-              position: 'absolute',
-              bottom: -30,
-              left: -30,
-              width: 80,
-              height: 80,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.05)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.2)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.3)'
-              }}
-            >
-              <PersonIcon sx={{ fontSize: 32, color: 'white' }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                Add New Customer
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                Create a new customer profile to start tracking credits
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Form */}
-            <Grid item xs={12} md={7}>
-              <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Customer Information
-                </Typography>
-                
-                <Stack spacing={3}>
-                  <TextField
-                    fullWidth
-                    label="Customer Name"
-                    value={newCustomerName}
-                    onChange={(e) => setNewCustomerName(e.target.value)}
-                    placeholder="Enter full customer name"
-                    InputProps={{
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <PersonIcon color="primary" />
-                        </InputAdornment>
-                      ),
-                    }}
-                    sx={{ 
-                      '& .MuiOutlinedInput-root': { 
-                        borderRadius: 3,
-                        '&:hover': {
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'primary.main',
-                          },
-                        },
-                      }
-                    }}
-                    autoFocus
-                    variant="outlined"
-                  />
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'info.50', border: '1px solid', borderColor: 'info.200' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <Avatar sx={{ bgcolor: 'info.main', width: 24, height: 24 }}>
-                        <Typography variant="caption" fontWeight={700}>ℹ</Typography>
-                      </Avatar>
-                      <Typography variant="subtitle2" fontWeight={700} color="info.main">
-                        What happens next?
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" color="info.dark">
-                      After creating the customer profile, you'll be able to add credit records, track payments, and manage their account history.
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-
-            {/* Right side - Preview/Stats */}
-            <Grid item xs={12} md={5}>
-              <Stack spacing={3}>
-                {/* Customer Preview Card */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Customer Preview
-                  </Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 2, borderRadius: 2, bgcolor: 'grey.100' }}>
-                    <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40 }}>
-                      <PersonIcon />
-                    </Avatar>
-                    <Box>
-                      <Typography variant="subtitle1" fontWeight={600}>
-                        {newCustomerName.trim() || 'Customer Name'}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        New Customer • 0 Credits
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Card>
-
-                {/* Quick Stats */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Current Statistics
-                  </Typography>
-                  <Grid container spacing={2}>
-                    <Grid item xs={6}>
-                      <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'success.50' }}>
-                        <Typography variant="h5" fontWeight={700} color="success.main">
-                          {Object.keys(credits).length}
-                        </Typography>
-                        <Typography variant="caption" color="success.dark">
-                          Total Customers
-                        </Typography>
-                      </Box>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'primary.50' }}>
-                        <Typography variant="h5" fontWeight={700} color="primary.main">
-                          {Object.values(credits).reduce((sum, customerCredits) => sum + customerCredits.length, 0)}
-                        </Typography>
-                        <Typography variant="caption" color="primary.dark">
-                          Total Credits
-                        </Typography>
-                      </Box>
-                    </Grid>
-                  </Grid>
-                </Card>
-              </Stack>
-            </Grid>
-          </Grid>
-        </DialogContent>
-
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => {
-              setAddCustomerDialog(false);
-              setNewCustomerName('');
-            }} 
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleAddCustomer}
-            startIcon={<AddIcon />}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              bgcolor: 'banner.main',
-              boxShadow: '0 4px 15px rgba(16, 24, 22, 0.4)',
-              '&:hover': {
-                bgcolor: 'banner.dark',
-                boxShadow: '0 6px 20px rgba(16, 24, 22, 0.6)',
-              }
-            }}
-            disabled={!newCustomerName.trim()}
-            size="large"
-          >
-            Create Customer
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Customer Detail Dialog */}
-      <Dialog
-        open={customerDetailDialog.open}
-        onClose={() => setCustomerDetailDialog({ open: false, customer: '' })}
-        maxWidth="lg"
-        fullWidth
-        PaperProps={{ 
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          } 
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            background: '#0369a1',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -40,
-              right: -40,
-              width: 120,
-              height: 120,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          <Box
-            sx={{
-              position: 'absolute',
-              bottom: -20,
-              left: -20,
-              width: 60,
-              height: 60,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.15)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-              <Avatar 
-                sx={{ 
-                  bgcolor: 'rgba(255,255,255,0.2)', 
-                  width: 64, 
-                  height: 64,
-                  backdropFilter: 'blur(10px)',
-                  border: '2px solid rgba(255,255,255,0.3)'
-                }}
-              >
-                <PersonIcon sx={{ fontSize: 32, color: 'white' }} />
-              </Avatar>
-              <Box>
-                <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                  {customerDetailDialog.customer}
-                </Typography>
-                <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                  Customer Credit Management
-                </Typography>
-              </Box>
-            </Box>
-            
-            {/* Quick stats in header */}
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              {customerDetailDialog.customer && credits[customerDetailDialog.customer] && (
-                <>
-                  <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(10px)' }}>
-                    <Typography variant="h6" fontWeight={700}>
-                      {credits[customerDetailDialog.customer].length}
-                    </Typography>
-                    <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                      Total Credits
-                    </Typography>
-                  </Box>
-                  <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'error.50' }}>
-                    <Typography variant="h6" fontWeight={700} color="error.main">
-                      ₱{calculateCustomerTotal(credits[customerDetailDialog.customer]).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                    </Typography>
-                    <Typography variant="caption" color="error.dark">
-                      Current Unpaid
-                    </Typography>
-                  </Box>
-                </>
-              )}
-            </Box>
-          </Box>
-        </Box>
-
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Actions */}
-            <Grid item xs={12} md={4}>
-              <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white', height: 'fit-content' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Quick Actions
-                </Typography>
-                <Stack spacing={2}>
-                  <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
-                    onClick={() => handleAddCreditToCustomer(customerDetailDialog.customer)}
-                    sx={{ 
-                      borderRadius: 3, 
-                      py: 1.5,
-                      background: '#0369a1',
-                      boxShadow: '0 4px 15px rgba(79, 172, 254, 0.4)',
-                      '&:hover': {
-                        background: '#075985',
-                        boxShadow: '0 6px 20px rgba(79, 172, 254, 0.6)',
-                      }
-                    }}
-                    fullWidth
-                    size="large"
-                  >
-                    Add New Credit
-                  </Button>
-                  
-                  {customerDetailDialog.customer && credits[customerDetailDialog.customer] && 
-                   calculateCustomerTotal(credits[customerDetailDialog.customer]) > 0 && (
-                    <Button
-                      variant="contained"
-                      startIcon={<PaymentIcon />}
-                      onClick={() => handlePayAllCredits(customerDetailDialog.customer)}
-                      sx={{ 
-                        borderRadius: 3, 
-                        py: 1.5,
-                        background: '#15803d',
-                        boxShadow: '0 4px 15px rgba(17, 153, 142, 0.4)',
-                        '&:hover': {
-                          background: '#166534',
-                          boxShadow: '0 6px 20px rgba(17, 153, 142, 0.6)',
-                        }
-                      }}
-                      fullWidth
-                      size="large"
-                    >
-                      Pay All Credit
-                    </Button>
-                  )}
-                  
-                  <Button
-                    variant="outlined"
-                    startIcon={<ExportIcon />}
-                    sx={{ 
-                      borderRadius: 3, 
-                      py: 1.5,
-                      borderColor: 'primary.main',
-                      color: 'primary.main',
-                      '&:hover': {
-                        bgcolor: 'primary.50',
-                        borderColor: 'primary.dark',
-                      }
-                    }}
-                    fullWidth
-                    size="large"
-                  >
-                    Export Records
-                  </Button>
-                </Stack>
-              </Card>
-            </Grid>
-
-            {/* Right side - Credit Records */}
-            <Grid item xs={12} md={8}>
-              <Card sx={{ borderRadius: 3, boxShadow: 2, bgcolor: 'white', overflow: 'hidden' }}>
-                <Box sx={{ p: 3, bgcolor: 'primary.50', borderBottom: '1px solid', borderColor: 'divider' }}>
-                  <Typography variant="h6" fontWeight={700} color="primary.main">
-                    Credit Records
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Manage all credit transactions for this customer
-                  </Typography>
-                </Box>
-                
-                <Box sx={{ maxHeight: 400, overflow: 'auto' }}>
-                  {customerDetailDialog.customer && credits[customerDetailDialog.customer] && credits[customerDetailDialog.customer].length > 0 ? (
-                    <List sx={{ p: 0 }}>
-                      {credits[customerDetailDialog.customer].map((credit, index) => (
-                        <ListItem 
-                          key={credit.id} 
-                          sx={{ 
-                            px: 3, 
-                            py: 2,
-                            borderBottom: index < credits[customerDetailDialog.customer].length - 1 ? '1px solid' : 'none',
-                            borderColor: 'divider',
-                            '&:hover': {
-                              bgcolor: 'grey.50'
-                            }
-                          }}
-                        >
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                            <Box sx={{ flex: 1 }}>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1 }}>
-                                <Typography variant="body1" fontWeight={600}>
-                                  {credit.description}
-                                </Typography>
-                                <Chip
-                                  label={credit.status.toUpperCase()}
-                                  color={credit.status === 'paid' ? 'success' : 'error'}
-                                  size="small"
-                                  icon={credit.status === 'paid' ? <PaidIcon /> : <UnpaidIcon />}
-                                  sx={{ fontWeight: 600 }}
-                                />
-                              </Box>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                                <Typography variant="body2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                  <CalendarIcon sx={{ fontSize: 16 }} />
-                                  {new Date(credit.date).toLocaleDateString()}
-                                </Typography>
-                                <Typography variant="h6" fontWeight={700} color={credit.status === 'paid' ? 'success.main' : 'error.main'}>
-                                  ₱{credit.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                                </Typography>
-                              </Box>
-                            </Box>
-                            <Stack direction="row" spacing={1}>
-                              {credit.status === 'unpaid' && (
-                                <Button
-                                  size="small"
-                                  variant="contained"
-                                  color="success"
-                                  startIcon={<PaymentIcon />}
-                                  onClick={() => handleMarkPaid(customerDetailDialog.customer, credit)}
-                                  sx={{ borderRadius: 2 }}
-                                >
-                                  Mark Paid
-                                </Button>
-                              )}
-                              <Button
-                                size="small"
-                                variant="outlined"
-                                color="primary"
-                                startIcon={<EditIcon />}
-                                onClick={() => handleEditCredit(customerDetailDialog.customer, credit)}
-                                sx={{ borderRadius: 2 }}
-                              >
-                                Edit
-                              </Button>
-                              <IconButton
-                                size="small"
-                                color="error"
-                                onClick={() => handleDeleteCredit(customerDetailDialog.customer, credit.id)}
-                                sx={{ border: '1px solid', borderColor: 'error.main', borderRadius: 2 }}
-                              >
-                                <DeleteIcon fontSize="small" />
-                              </IconButton>
-                            </Stack>
-                          </Box>
-                        </ListItem>
-                      ))}
-                    </List>
-                  ) : (
-                    <Box sx={{ p: 6, textAlign: 'center' }}>
-                      <Avatar sx={{ bgcolor: 'grey.100', width: 64, height: 64, mx: 'auto', mb: 2 }}>
-                        <CreditIcon sx={{ fontSize: 32, color: 'grey.500' }} />
-                      </Avatar>
-                      <Typography variant="h6" fontWeight={600} color="text.secondary" sx={{ mb: 1 }}>
-                        No Credit Records
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                        This customer doesn't have any credit records yet.
-                      </Typography>
-                      <Button
-                        variant="contained"
-                        startIcon={<AddIcon />}
-                        onClick={() => handleAddCreditToCustomer(customerDetailDialog.customer)}
-                        sx={{ borderRadius: 3 }}
-                      >
-                        Add First Credit
-                      </Button>
-                    </Box>
-                  )}
-                </Box>
-              </Card>
-            </Grid>
-          </Grid>
-        </DialogContent>
-
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setCustomerDetailDialog({ open: false, customer: '' })} 
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Add Credit to Customer Dialog */}
-      <Dialog
-        open={addCreditDialog.open && !!addCreditDialog.customer}
-        onClose={() => setAddCreditDialog({ open: false, customer: '' })}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{ 
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          } 
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            background: '#0e7490',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -30,
-              right: -30,
-              width: 100,
-              height: 100,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.2)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.3)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.4)'
-              }}
-            >
-              <AddIcon sx={{ fontSize: 32, color: 'white' }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1, color: 'white' }}>
-                Add Credit Record
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.85, color: 'white' }}>
-                Create a new credit entry for {addCreditDialog.customer}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Form */}
-            <Grid item xs={12} md={8}>
-              <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Credit Details
-                </Typography>
-                
-                <Stack spacing={4}>
-                  <TextField
-                    fullWidth
-                    label="Credit Amount"
-                    type="number"
-                    value={newAmount}
-                    onChange={(e) => setNewAmount(e.target.value)}
-                    placeholder="0.00"
-                    InputProps={{
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <MoneyIcon color="success" />
-                        </InputAdornment>
-                      ),
-                    }}
-                    sx={{ 
-                      '& .MuiOutlinedInput-root': { 
-                        borderRadius: 3,
-                        fontSize: '1.1rem',
-                        '&:hover': {
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'success.main',
-                          },
-                        },
-                      }
-                    }}
-                    autoFocus
-                  />
-                  
-                  <TextField
-                    fullWidth
-                    label="Description"
-                    value={newDescription}
-                    onChange={(e) => setNewDescription(e.target.value)}
-                    placeholder="What is this credit for? (e.g., Product purchase, Service fee, etc.)"
-                    multiline
-                    rows={4}
-                    sx={{ 
-                      '& .MuiOutlinedInput-root': { 
-                        borderRadius: 3,
-                        '&:hover': {
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'primary.main',
-                          },
-                        },
-                      }
-                    }}
-                  />
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <Avatar sx={{ bgcolor: 'warning.main', width: 24, height: 24 }}>
-                        <Typography variant="caption" fontWeight={700}>!</Typography>
-                      </Avatar>
-                      <Typography variant="subtitle2" fontWeight={700} color="warning.main">
-                        Credit Information
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" color="warning.dark">
-                      This credit will be marked as "unpaid" by default. You can mark it as paid later when the customer settles the amount.
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-
-            {/* Right side - Summary */}
-            <Grid item xs={12} md={4}>
-              <Stack spacing={3}>
-                {/* Credit Summary */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Credit Summary
-                  </Typography>
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'grey.100', mb: 2 }}>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                      Customer
-                    </Typography>
-                    <Typography variant="h6" fontWeight={600}>
-                      {addCreditDialog.customer}
-                    </Typography>
-                  </Box>
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'success.50', mb: 2 }}>
-                    <Typography variant="body2" color="success.dark" sx={{ mb: 1 }}>
-                      Amount
-                    </Typography>
-                    <Typography variant="h5" fontWeight={700} color="success.main">
-                      ₱{newAmount ? Number(newAmount).toLocaleString('en-PH', { minimumFractionDigits: 2 }) : '0.00'}
-                    </Typography>
-                  </Box>
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'info.50' }}>
-                    <Typography variant="body2" color="info.dark" sx={{ mb: 1 }}>
-                      Status
-                    </Typography>
-                    <Chip 
-                      label="UNPAID" 
-                      color="error" 
-                      size="small" 
-                      icon={<UnpaidIcon />}
-                      sx={{ fontWeight: 600 }}
-                    />
-                  </Box>
-                </Card>
-
-                {/* Customer Stats */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Customer Stats
-                  </Typography>
-                  {addCreditDialog.customer && credits[addCreditDialog.customer] && (
-                    <Grid container spacing={2}>
-                      <Grid item xs={12}>
-                        <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'primary.50' }}>
-                          <Typography variant="h6" fontWeight={700} color="primary.main">
-                            {credits[addCreditDialog.customer].length}
-                          </Typography>
-                          <Typography variant="caption" color="primary.dark">
-                            Existing Credits
-                          </Typography>
-                        </Box>
-                      </Grid>
-                      <Grid item xs={12}>
-                        <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'error.50' }}>
-                          <Typography variant="h6" fontWeight={700} color="error.main">
-                            ₱{calculateCustomerTotal(credits[addCreditDialog.customer]).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                          </Typography>
-                          <Typography variant="caption" color="error.dark">
-                            Current Unpaid
-                          </Typography>
-                        </Box>
-                      </Grid>
-                    </Grid>
-                  )}
-                </Card>
-              </Stack>
-            </Grid>
-          </Grid>
-        </DialogContent>
-
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setAddCreditDialog({ open: false, customer: '' })} 
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleSaveCreditToCustomer}
-            startIcon={<AddIcon />}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              background: '#0e7490',
-              color: 'white',
-              boxShadow: '0 4px 15px rgba(168, 237, 234, 0.4)',
-              '&:hover': {
-                background: '#155e75',
-                boxShadow: '0 6px 20px rgba(168, 237, 234, 0.6)',
-              }
-            }}
-            disabled={!newAmount || isNaN(Number(newAmount)) || Number(newAmount) <= 0}
-            size="large"
-          >
-            Add Credit Record
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Edit Credit Dialog */}
-      <Dialog
-        open={editCreditDialog.open && !!editCreditDialog.customer && !!editCreditDialog.credit}
-        onClose={() => setEditCreditDialog({ open: false, customer: '' })}
-        maxWidth="sm"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main' }}>
-              <EditIcon />
-            </Avatar>
-            <Typography variant="h6" fontWeight={700}>
-              Edit Credit for {editCreditDialog.customer}
-            </Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          <Stack spacing={3} sx={{ mt: 1 }}>
+      {/* Add customer */}
+      <Dialog open={addCustomerOpen} onClose={() => setAddCustomerOpen(false)} maxWidth="xs" fullWidth>
+        <Box component="form" onSubmit={handleAddCustomer} noValidate>
+          <DialogTitle>Add customer</DialogTitle>
+          <DialogContent sx={{ display: 'grid', gap: 2, pt: '8px !important' }}>
             <TextField
-              fullWidth
+              autoFocus
+              label="Customer name"
+              value={newCustomerName}
+              onChange={(e) => {
+                setNewCustomerName(e.target.value);
+                setAddCustomerError(undefined);
+              }}
+              error={Boolean(addCustomerError)}
+              helperText={addCustomerError}
+            />
+            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: -1 }}>
+              First credit (optional)
+            </Typography>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)', gap: 1 }}>
+              <TextField
+                label="Amount"
+                type="number"
+                value={newCustomerAmount}
+                onChange={(e) => {
+                  setNewCustomerAmount(e.target.value);
+                  setAddCustomerError(undefined);
+                }}
+                inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+                InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+              />
+              <TextField label="What was taken" value={newCustomerDescription} onChange={(e) => setNewCustomerDescription(e.target.value)} />
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button color="inherit" onClick={() => setAddCustomerOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained">
+              Add customer
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
+
+      {/* Edit credit */}
+      <Dialog open={editing !== null} onClose={() => setEditing(null)} maxWidth="xs" fullWidth>
+        <Box component="form" onSubmit={handleSaveEdit} noValidate>
+          <DialogTitle>Edit credit</DialogTitle>
+          <DialogContent sx={{ display: 'grid', gap: 2, pt: '8px !important' }}>
+            <TextField
+              autoFocus
               label="Amount"
               type="number"
-              value={newAmount}
-              onChange={(e) => setNewAmount(e.target.value)}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <MoneyIcon color="action" />
-                  </InputAdornment>
-                ),
-              }}
-              sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
+              value={editAmount}
+              onChange={(e) => setEditAmount(e.target.value)}
+              error={editAmount !== '' && parseAmount(editAmount) === null}
+              helperText={editAmount !== '' && parseAmount(editAmount) === null ? 'Enter an amount above zero' : undefined}
+              inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
+              InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
             />
-            <TextField
-              fullWidth
-              label="Description (Optional)"
-              value={newDescription}
-              onChange={(e) => setNewDescription(e.target.value)}
-              multiline
-              rows={3}
-              sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
-          <Button onClick={() => setEditCreditDialog({ open: false, customer: '' })} sx={{ borderRadius: 3 }}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={handleSaveEditedCredit}
-            startIcon={<EditIcon />}
-            sx={{ borderRadius: 3 }}
-          >
-            Save Changes
-          </Button>
-        </DialogActions>
+            <TextField label="What was taken" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button color="inherit" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained" disabled={parseAmount(editAmount) === null}>
+              Save
+            </Button>
+          </DialogActions>
+        </Box>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog 
-        open={!!deleteDialog} 
-        onClose={() => setDeleteDialog(null)}
-        PaperProps={{
-          sx: { borderRadius: 3 }
-        }}
-      >
+      {/* Collect all */}
+      <Dialog open={collectFor !== null} onClose={() => setCollectFor(null)} maxWidth="xs" fullWidth>
         <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'error.main' }}>
-              <DeleteIcon />
-            </Avatar>
-            <Typography variant="h6" fontWeight={700}>
-              Confirm Delete
-            </Typography>
-          </Box>
+          Collect {formatPeso(collectTotal)} from {collectFor}?
         </DialogTitle>
         <DialogContent>
-          <Typography>
-            Are you sure you want to delete this credit record? This action cannot be undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
-          <Button 
-            onClick={() => setDeleteDialog(null)}
-            sx={{ borderRadius: 3 }}
-          >
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            color="error"
-            onClick={confirmDeleteCredit}
-            sx={{ borderRadius: 3 }}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Pay All Confirmation Dialog */}
-      <Dialog
-        open={payAllDialog.open}
-        onClose={() => setPayAllDialog({ ...payAllDialog, open: false })}
-        maxWidth="sm"
-        fullWidth
-        PaperProps={{ sx: { borderRadius: 3 } }}
-      >
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'success.main' }}>
-              <CheckCircleIcon />
-            </Avatar>
-            <Typography variant="h6" fontWeight={700}>
-              Confirm Payment
-            </Typography>
+          <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '10px', maxHeight: 220, overflowY: 'auto', mb: 2 }}>
+            {collectRecords.map((c) => (
+              <Box key={c.id} sx={{ display: 'flex', gap: 1, px: 1.5, py: 1, '&:not(:last-of-type)': { borderBottom: 1, borderColor: 'divider' } }}>
+                <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0 }}>
+                  {c.description}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {formatDate(c.date)}
+                </Typography>
+                <Typography variant="body2" fontWeight={700} sx={{ minWidth: 84, textAlign: 'right' }}>
+                  {formatPeso(c.amount)}
+                </Typography>
+              </Box>
+            ))}
           </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to mark all unpaid credits for <strong>{payAllDialog.customer}</strong> as paid? This action will log a general sale for the total amount of ₱{payAllDialog.totalAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}.
+          <Typography variant="body2" color="text.secondary">
+            All {collectRecords.length} unpaid record{collectRecords.length !== 1 ? 's' : ''} will be marked paid and recorded as one General sale in Sales
+            Record.
           </Typography>
         </DialogContent>
-        <DialogActions sx={{ p: 3 }}>
-          <Button 
-            onClick={() => setPayAllDialog({ ...payAllDialog, open: false })}
-            sx={{ borderRadius: 3 }}
-          >
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setCollectFor(null)}>
             Cancel
           </Button>
-          <Button
-            variant="contained"
-            color="success"
-            onClick={() => {
-              confirmPayAllCredits(payAllDialog.customer);
-              setPayAllDialog({ ...payAllDialog, open: false });
-            }}
-            sx={{ borderRadius: 3 }}
-          >
-            Confirm Payment
+          <Button variant="contained" color="success" onClick={confirmCollectAll}>
+            Collect {formatPeso(collectTotal)}
           </Button>
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={snackbar.severity} variant="filled" sx={{ width: '100%', borderRadius: 3 }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+      {/* Remove customer */}
+      <Dialog open={removeCustomer !== null} onClose={() => setRemoveCustomer(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Remove {removeCustomer}?</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            {removeCustomer && credits[removeCustomer]
+              ? (() => {
+                  const s = summarizeCustomer(credits[removeCustomer]);
+                  return s.balance > 0
+                    ? `They still owe ${formatPeso(s.balance)}. Removing them deletes all ${s.count} of their credit records.`
+                    : `This deletes their ${s.count} credit record${s.count !== 1 ? 's' : ''}. Sales already recorded aren’t affected.`;
+                })()
+              : null}
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setRemoveCustomer(null)}>
+            Cancel
+          </Button>
+          <Button variant="contained" color="error" onClick={confirmRemoveCustomer}>
+            Remove
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Restore backup */}
+      <Dialog open={pendingRestore !== null} onClose={() => setPendingRestore(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Restore this backup?</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            The backup{pendingRestore?.exportDate ? ` from ${formatDate(new Date(pendingRestore.exportDate))}` : ''} has {restoreCount} customer
+            {restoreCount !== 1 ? 's' : ''}. It <strong>replaces all {summaries.length} current customer{summaries.length !== 1 ? 's' : ''}</strong> and their
+            records. Export a backup first if you might need the current data.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setPendingRestore(null)}>
+            Cancel
+          </Button>
+          <Button variant="contained" color="error" onClick={confirmRestore}>
+            Replace with backup
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
 
-export default CustomerCredit; 
+export default CustomerCredit;

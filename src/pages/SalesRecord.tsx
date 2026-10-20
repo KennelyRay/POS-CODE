@@ -1,6 +1,5 @@
 import React, { useCallback, useContext, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Box,
   Button,
   Card,
@@ -14,7 +13,6 @@ import {
   FormControlLabel,
   IconButton,
   InputAdornment,
-  Snackbar,
   Tab,
   Tabs,
   TextField,
@@ -40,6 +38,7 @@ import { saveAs } from 'file-saver';
 import PredictField, { Highlight } from '../components/PredictField';
 import ExcelJS from 'exceljs';
 
+import { useNotify } from '../contexts/NotificationContext';
 type ClearedSalesBatch = {
   id: string;
   clearedAt: string;
@@ -826,14 +825,12 @@ const HistoryBatch: React.FC<{
 
 // ---------- Page ----------
 
-type Toast = { open: boolean; message: string; severity: 'success' | 'info' | 'error'; undo?: () => void };
-
 const SalesRecord: React.FC = () => {
   const salesContext = useContext(SalesContext);
   const grossSalesContext = useContext(GrossSalesContext);
   const { products } = useContext(ProductsContext);
   const sales = salesContext.sales;
-  const [snackbar, setSnackbar] = useState<Toast>({ open: false, message: '', severity: 'success' });
+  const notify = useNotify();;
   const [activeTab, setActiveTab] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [generalFilter, setGeneralFilter] = useState<GeneralFilter>('all');
@@ -951,14 +948,13 @@ const SalesRecord: React.FC = () => {
   const handleAdd = useCallback(
     (sale: SaleRecord) => {
       salesContext.addSale(sale);
-      setSnackbar({
-        open: true,
-        message: `Added ${describeSale(sale)} · ${formatPeso(sale.total)}`,
-        severity: 'success',
-        undo: () => persistSales(JSON.parse(localStorage.getItem('pos_sales') || '[]').filter((s: SaleRecord) => s.id !== sale.id)),
-      });
+      const undo = () => {
+        const current: SaleRecord[] = JSON.parse(localStorage.getItem('pos_sales') || '[]');
+        persistSales(current.filter((s) => s.id !== sale.id));
+      };
+      notify(`Added ${describeSale(sale)} · ${formatPeso(sale.total)}`, { severity: 'success', action: { label: 'Undo', onClick: undo } });
     },
-    [persistSales, salesContext]
+    [notify, persistSales, salesContext]
   );
 
   const handleDeleteSale = useCallback(
@@ -966,19 +962,14 @@ const SalesRecord: React.FC = () => {
       const index = sales.findIndex((s) => s.id === sale.id);
       if (index < 0) return;
       persistSales(sales.filter((s) => s.id !== sale.id));
-      setSnackbar({
-        open: true,
-        message: `Deleted ${describeSale(sale)}`,
-        severity: 'info',
-        undo: () => {
-          const current: SaleRecord[] = JSON.parse(localStorage.getItem('pos_sales') || '[]');
-          const restored = [...current];
-          restored.splice(Math.min(index, restored.length), 0, sale);
-          persistSales(restored);
-        },
-      });
+      const undo = () => {
+        const restored: SaleRecord[] = JSON.parse(localStorage.getItem('pos_sales') || '[]');
+        restored.splice(Math.min(index, restored.length), 0, sale);
+        persistSales(restored);
+      };
+      notify(`Deleted ${describeSale(sale)}`, { severity: 'info', action: { label: 'Undo', onClick: undo } });
     },
-    [persistSales, sales]
+    [notify, persistSales, sales]
   );
 
   const addToClearedHistory = (batchSales: SaleRecord[], reason: ClearedSalesBatch['reason']) => {
@@ -1001,7 +992,7 @@ const SalesRecord: React.FC = () => {
   const handleClearAllSales = () => {
     clearCurrentSales('clear-all');
     setClearDialogOpen(false);
-    setSnackbar({ open: true, message: 'Sales cleared. You can find them under History.', severity: 'success' });
+    notify('Sales cleared. You can find them under History.', 'success');
   };
 
   const handleExportSales = async () => {
@@ -1300,11 +1291,7 @@ const SalesRecord: React.FC = () => {
     // Record gross sales data using the context
     grossSalesContext.recordGrossSales(totalGrossSales, storeCashierTotal + storeGcashTotal);
     
-    setSnackbar({
-      open: true,
-      message: 'Report exported and totals recorded in Gross Sales.',
-      severity: 'success',
-    });
+    notify('Report exported and totals recorded in Gross Sales.', 'success');
   };
 
   const handleConfirmExport = async () => {
@@ -1313,13 +1300,13 @@ const SalesRecord: React.FC = () => {
       await handleExportSales();
       if (clearAfterExport) {
         clearCurrentSales('export-and-clear');
-        setSnackbar({ open: true, message: 'Report exported, recorded in Gross Sales, and sales moved to History.', severity: 'success' });
+        notify('Report exported, recorded in Gross Sales, and sales moved to History.', 'success');
       }
       setExportDialogOpen(false);
       setClearAfterExport(false);
     } catch (error) {
       console.error('Export failed:', error);
-      setSnackbar({ open: true, message: 'Export failed. Nothing was recorded or cleared.', severity: 'error' });
+      notify('Export failed. Nothing was recorded or cleared.', 'error');
     } finally {
       setExporting(false);
     }
@@ -1330,7 +1317,7 @@ const SalesRecord: React.FC = () => {
     const ids = new Set(historyToDelete);
     setClearedSalesHistory((prev) => prev.filter((h) => !ids.has(h.id)));
     setSelectedHistoryIds((prev) => prev.filter((id) => !ids.has(id)));
-    setSnackbar({ open: true, message: `Deleted ${ids.size} record${ids.size !== 1 ? 's' : ''} from History.`, severity: 'success' });
+    notify(`Deleted ${ids.size} record${ids.size !== 1 ? 's' : ''} from History.`, 'success');
     setHistoryToDelete(null);
   };
 
@@ -1615,34 +1602,6 @@ const SalesRecord: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={snackbar.undo ? 5000 : 3000}
-        onClose={(_, reason) => reason !== 'clickaway' && setSnackbar((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          severity={snackbar.severity}
-          variant="filled"
-          sx={{ width: '100%', alignItems: 'center' }}
-          action={
-            snackbar.undo ? (
-              <Button
-                color="inherit"
-                size="small"
-                onClick={() => {
-                  snackbar.undo?.();
-                  setSnackbar((s) => ({ ...s, open: false, undo: undefined }));
-                }}
-              >
-                Undo
-              </Button>
-            ) : undefined
-          }
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

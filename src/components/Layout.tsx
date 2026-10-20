@@ -174,7 +174,7 @@ const Layout: React.FC = () => {
 
       <Box sx={{ px: 2.5, py: 2, borderTop: 1, borderColor: 'divider' }}>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-          Version 1.25.0 · Updated 2026-10-19
+          Version 1.26.0 · Updated 2026-10-19
         </Typography>
         <Typography variant="caption" color="text.secondary">
           Coded by Ken

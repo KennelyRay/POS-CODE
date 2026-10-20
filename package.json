@@ -1,6 +1,6 @@
 {
   "name": "pos-system",
-  "version": "1.25.0",
+  "version": "1.26.0",
   "private": true,
   "description": "Point of Sale System for KKK-A",
   "author": "KKK-A",
@@ -13,11 +13,6 @@
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.11.16",
     "@mui/material": "^5.13.0",
-    "@types/exceljs": "^0.5.3",
-    "@types/node": "^16.18.0",
-    "@types/react": "^18.2.0",
-    "@types/react-big-calendar": "^1.16.2",
-    "@types/react-dom": "^18.2.0",
     "electron-is-dev": "^2.0.0",
     "escpos": "^3.0.0-alpha.6",
     "escpos-usb": "^3.0.0-alpha.4",
@@ -29,7 +24,6 @@
     "react-big-calendar": "^1.19.2",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.11.0",
-    "react-scripts": "4.0.3",
     "react-to-print": "^2.14.13",
     "xlsx": "^0.18.5"
   },
@@ -61,9 +55,15 @@
     ]
   },
   "devDependencies": {
+    "@types/exceljs": "^0.5.3",
     "@types/file-saver": "^2.0.7",
+    "@types/node": "^16.18.0",
+    "@types/react": "^18.2.0",
+    "@types/react-big-calendar": "^1.16.2",
+    "@types/react-dom": "^18.2.0",
     "electron": "^28.0.0",
     "electron-builder": "^26.0.12",
+    "react-scripts": "4.0.3",
     "typescript": "^4.5.5"
   },
   "main": "public/electron.js",
@@ -124,7 +124,7 @@
     ],
     "directories": {
       "buildResources": "assets",
-      "output": "dist-electron-1.25.0-installer"
+      "output": "dist-electron-1.26.0-installer"
     },
     "win": {
       "target": "nsis",

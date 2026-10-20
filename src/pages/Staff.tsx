@@ -18,8 +18,6 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Snackbar,
-  Alert,
   Divider,
   Paper,
   Tab,
@@ -47,6 +45,7 @@ import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 
+import { useNotify } from '../contexts/NotificationContext';
 const localizer = momentLocalizer(moment);
 
 // Staff interface
@@ -106,9 +105,7 @@ const Staff: React.FC = () => {
   const [attendanceDialogOpen, setAttendanceDialogOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' | 'info' }>({ 
-    open: false, message: '', severity: 'success' 
-  });
+  const notify = useNotify();;
 
   const [formData, setFormData] = useState<Omit<StaffMember, 'id'>>({
     name: '',
@@ -204,12 +201,12 @@ const Staff: React.FC = () => {
   const handleDeleteStaff = (id: string) => {
     setStaff(prev => prev.filter(s => s.id !== id));
     setAttendance(prev => prev.filter(a => a.staffId !== id));
-    setSnackbar({ open: true, message: 'Staff member deleted successfully!', severity: 'success' });
+    notify('Staff member deleted successfully!', 'success');
   };
 
   const handleUpdateStaff = () => {
     if (!editingStaff || !formData.name || !formData.position) {
-      setSnackbar({ open: true, message: 'Please fill in required fields', severity: 'error' });
+      notify('Please fill in required fields', 'error');
       return;
     }
 
@@ -219,7 +216,7 @@ const Staff: React.FC = () => {
     };
 
     setStaff(prev => prev.map(s => s.id === editingStaff.id ? updatedStaff : s));
-    setSnackbar({ open: true, message: 'Staff member updated successfully!', severity: 'success' });
+    notify('Staff member updated successfully!', 'success');
     setDialogOpen(false);
     setEditingStaff(null);
     resetForm();
@@ -227,7 +224,7 @@ const Staff: React.FC = () => {
 
   const handleAddStaff = () => {
     if (!formData.name || !formData.position) {
-      setSnackbar({ open: true, message: 'Please fill in required fields', severity: 'error' });
+      notify('Please fill in required fields', 'error');
       return;
     }
 
@@ -237,7 +234,7 @@ const Staff: React.FC = () => {
     };
 
     setStaff(prev => [...prev, newStaff]);
-    setSnackbar({ open: true, message: 'Staff member added successfully!', severity: 'success' });
+    notify('Staff member added successfully!', 'success');
     setDialogOpen(false);
     resetForm();
   };
@@ -254,7 +251,7 @@ const Staff: React.FC = () => {
         notes: attendanceNotes,
       };
       setAttendance(prev => prev.map(a => a.id === existingRecord.id ? updatedRecord : a));
-      setSnackbar({ open: true, message: 'Attendance updated successfully!', severity: 'success' });
+      notify('Attendance updated successfully!', 'success');
     } else {
       const newRecord: AttendanceRecord = {
         id: Date.now().toString(),
@@ -264,7 +261,7 @@ const Staff: React.FC = () => {
         notes: attendanceNotes,
       };
       setAttendance(prev => [...prev, newRecord]);
-      setSnackbar({ open: true, message: 'Attendance recorded successfully!', severity: 'success' });
+      notify('Attendance recorded successfully!', 'success');
     }
 
     setAttendanceDialogOpen(false);
@@ -303,7 +300,7 @@ const Staff: React.FC = () => {
 
   const calculateSalary = () => {
     if (!salaryCalculation.selectedStaffId || !salaryCalculation.dailyRate) {
-      setSnackbar({ open: true, message: 'Please select staff and enter daily rate', severity: 'error' });
+      notify('Please select staff and enter daily rate', 'error');
       return;
     }
 
@@ -369,7 +366,7 @@ const Staff: React.FC = () => {
     setAttendance(updatedAttendance);
     setCalendarAttendanceDialogOpen(false);
     setCalendarSelectedDate(null);
-    setSnackbar({ open: true, message: 'Attendance updated for selected date.', severity: 'success' });
+    notify('Attendance updated for selected date.', 'success');
   };
 
   return (
@@ -1108,21 +1105,6 @@ const Staff: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert 
-          severity={snackbar.severity} 
-          variant="filled"
-          sx={{ borderRadius: 2 }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

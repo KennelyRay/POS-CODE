@@ -14,6 +14,7 @@ import GrossSales from './pages/GrossSales';
 import ProtectedRoute from './components/ProtectedRoute';
 import { PrinterProvider } from './contexts/PrinterContext';
 import { BasketProvider } from './contexts/BasketContext';
+import { NotificationProvider } from './contexts/NotificationContext';
 import { buildTheme, isThemeName, ThemeName } from './theme';
 
 // 1. Theme context for global theme selection
@@ -618,30 +619,32 @@ function App() {
               <PrinterProvider>
                 <ThemeProvider theme={theme}>
                   <CssBaseline enableColorScheme />
-                  <BasketProvider>
-                    <Router>
-                      <Routes>
-                        <Route path="/login" element={<Login />} />
-                        <Route
-                          element={
-                            <ProtectedRoute>
-                              <Layout />
-                            </ProtectedRoute>
-                          }
-                        >
-                          <Route path="/" element={<Basket />} />
-                          <Route path="/sales" element={<SalesRecord />} />
-                          <Route path="/products" element={<ManageProducts />} />
-                          <Route path="/receipts" element={<Receipts />} />
-                          <Route path="/settings" element={<Settings />} />
-                          <Route path="/customer-credit" element={<CustomerCredit />} />
-                          <Route path="/staff" element={<Staff />} />
-                          <Route path="/gross-sales" element={<GrossSales />} />
-                        </Route>
-                        <Route path="*" element={<Navigate to="/login" replace />} />
-                      </Routes>
-                    </Router>
-                  </BasketProvider>
+                  <NotificationProvider>
+                    <BasketProvider>
+                      <Router>
+                        <Routes>
+                          <Route path="/login" element={<Login />} />
+                          <Route
+                            element={
+                              <ProtectedRoute>
+                                <Layout />
+                              </ProtectedRoute>
+                            }
+                          >
+                            <Route path="/" element={<Basket />} />
+                            <Route path="/sales" element={<SalesRecord />} />
+                            <Route path="/products" element={<ManageProducts />} />
+                            <Route path="/receipts" element={<Receipts />} />
+                            <Route path="/settings" element={<Settings />} />
+                            <Route path="/customer-credit" element={<CustomerCredit />} />
+                            <Route path="/staff" element={<Staff />} />
+                            <Route path="/gross-sales" element={<GrossSales />} />
+                          </Route>
+                          <Route path="*" element={<Navigate to="/login" replace />} />
+                        </Routes>
+                      </Router>
+                    </BasketProvider>
+                  </NotificationProvider>
                 </ThemeProvider>
               </PrinterProvider>
             </GrossSalesContext.Provider>

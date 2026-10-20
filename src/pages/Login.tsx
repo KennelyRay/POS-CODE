@@ -6,8 +6,6 @@ import {
   Typography,
   InputAdornment,
   IconButton,
-  Snackbar,
-  Alert,
   CircularProgress,
   Fade,
   Stack,
@@ -26,6 +24,7 @@ import {
   AdminPanelSettings as AdminIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
+import { useNotify } from '../contexts/NotificationContext';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -34,10 +33,7 @@ const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fadeOut, setFadeOut] = useState(false);
-  const [error, setError] = useState<{ open: boolean; message: string }>({
-    open: false,
-    message: '',
-  });
+  const notify = useNotify();
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,10 +53,7 @@ const Login: React.FC = () => {
           navigate('/');
         }, 500); // Match this with the transition duration
       } else {
-        setError({
-          open: true,
-          message: 'Invalid username or password',
-        });
+        notify('Invalid username or password', 'error');
         setLoading(false);
       }
     }, 1000);
@@ -235,17 +228,6 @@ const Login: React.FC = () => {
           </Box>
         </Card>
       </Fade>
-
-      <Snackbar
-        open={error.open}
-        autoHideDuration={4000}
-        onClose={() => setError({ ...error, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity="error" variant="filled" sx={{ width: '100%' }}>
-          {error.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

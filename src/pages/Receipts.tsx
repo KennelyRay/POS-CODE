@@ -14,8 +14,6 @@ import {
   InputLabel,
   MenuItem,
   Select,
-  Snackbar,
-  Alert,
   TextField,
   Typography,
 } from '@mui/material';
@@ -30,6 +28,7 @@ import {
 import { ReceiptRecord, SalesContext, StoreSettingsContext } from '../App';
 import { usePrinter } from '../contexts/PrinterContext';
 
+import { useNotify } from '../contexts/NotificationContext';
 type Receipt = ReceiptRecord;
 
 // Receipts sorted newest first, with the values the list filters and groups on
@@ -274,11 +273,7 @@ const Receipts: React.FC = () => {
   const [openReceipt, setOpenReceipt] = useState<Receipt | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [printingId, setPrintingId] = useState<string | null>(null);
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' }>({
-    open: false,
-    message: '',
-    severity: 'success',
-  });
+  const notify = useNotify();;
 
   const deferredSearch = useDeferredValue(searchQuery);
   const normalizedSearch = deferredSearch.trim().toLowerCase();
@@ -393,19 +388,16 @@ const Receipts: React.FC = () => {
           birNumber: storeSettings?.birNumber || '',
           qrData: getReceiptQrData(receipt),
         });
-        setSnackbar(
-          success
-            ? { open: true, message: 'Receipt printed.', severity: 'success' }
-            : { open: true, message: 'Failed to print receipt. Check the printer connection.', severity: 'error' }
-        );
+        if (success) notify('Receipt printed.', 'success');
+        else notify('Failed to print receipt. Check the printer connection.', 'error');
       } catch (error) {
         console.error('Error printing receipt:', error);
-        setSnackbar({ open: true, message: 'Something went wrong while printing.', severity: 'error' });
+        notify('Something went wrong while printing.', 'error');
       } finally {
         setPrintingId(null);
       }
     },
-    [printReceipt, storeSettings]
+    [notify, printReceipt, storeSettings]
   );
 
   const requestDeleteOne = useCallback((receipt: Receipt) => {
@@ -444,7 +436,7 @@ const Receipts: React.FC = () => {
       return next;
     });
     if (openReceipt && ids.includes(openReceipt.id)) setOpenReceipt(null);
-    setSnackbar({ open: true, message: `Deleted ${ids.length} receipt${ids.length !== 1 ? 's' : ''}.`, severity: 'success' });
+    notify(`Deleted ${ids.length} receipt${ids.length !== 1 ? 's' : ''}.`, 'success');
     setPendingDelete(null);
   };
 
@@ -775,16 +767,6 @@ const Receipts: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

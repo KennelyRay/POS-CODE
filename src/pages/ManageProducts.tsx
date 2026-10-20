@@ -18,8 +18,6 @@ import {
   TextField,
   Typography,
   MenuItem,
-  Snackbar,
-  Alert,
   Chip,
   Tooltip,
   InputAdornment,
@@ -50,6 +48,7 @@ import {
 import { useReactToPrint } from 'react-to-print';
 import { ProductsContext, Product, StoreSettingsContext } from '../App';
 
+import { useNotify } from '../contexts/NotificationContext';
 type PriceListCategoryGroup = {
   name: string;
   products: Product[];
@@ -340,7 +339,7 @@ const ManageProducts: React.FC = () => {
   const [priceListDialogOpen, setPriceListDialogOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' }>({ open: false, message: '', severity: 'success' });
+  const notify = useNotify();;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const priceListPrintRef = useRef<HTMLDivElement>(null);
   
@@ -461,21 +460,17 @@ const ManageProducts: React.FC = () => {
         });
 
         if (hasDuplicateBarcode) {
-          setSnackbar({ 
-            open: true, 
-            message: 'One or more barcodes already exist in another product', 
-            severity: 'error' 
-          });
+          notify('One or more barcodes already exist in another product', 'error');
           return;
         }
       }
 
       if (cleanedProduct.id) {
         updateProduct(cleanedProduct);
-        setSnackbar({ open: true, message: 'Product updated', severity: 'success' });
+        notify('Product updated', 'success');
       } else {
         addProduct({ ...cleanedProduct, id: Date.now().toString() });
-        setSnackbar({ open: true, message: 'Product added', severity: 'success' });
+        notify('Product added', 'success');
       }
       handleCloseDialog();
     }
@@ -500,11 +495,7 @@ const ManageProducts: React.FC = () => {
     );
 
     if (isDuplicate) {
-      setSnackbar({ 
-        open: true, 
-        message: 'This barcode already exists in another product', 
-        severity: 'error' 
-      });
+      notify('This barcode already exists in another product', 'error');
       return;
     }
 
@@ -525,10 +516,10 @@ const ManageProducts: React.FC = () => {
         category: product.category
       }));
       exportProducts(productsToExport, 'products.csv');
-      setSnackbar({ open: true, message: 'Products exported successfully', severity: 'success' });
+      notify('Products exported successfully', 'success');
     } catch (error) {
       console.error('Export error:', error);
-      setSnackbar({ open: true, message: 'Error exporting products', severity: 'error' });
+      notify('Error exporting products', 'error');
     }
   };
 
@@ -559,12 +550,12 @@ const ManageProducts: React.FC = () => {
           });
 
           await importProducts(importedProducts);
-          setSnackbar({ open: true, message: 'Products imported successfully', severity: 'success' });
+          notify('Products imported successfully', 'success');
         };
         reader.readAsText(file);
       } catch (error) {
         console.error('Import error:', error);
-        setSnackbar({ open: true, message: 'Error importing products', severity: 'error' });
+        notify('Error importing products', 'error');
       }
     }
   };
@@ -578,7 +569,7 @@ const ManageProducts: React.FC = () => {
 
   const handleOpenPriceListDialog = () => {
     if (products.length === 0) {
-      setSnackbar({ open: true, message: 'No products available to print.', severity: 'info' });
+      notify('No products available to print.', 'info');
       return;
     }
     setPriceListDialogOpen(true);
@@ -1617,15 +1608,6 @@ const ManageProducts: React.FC = () => {
           </Button>
         </DialogActions>
       </Dialog>
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-      >
-        <Alert severity={snackbar.severity} sx={{ width: '100%' }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };

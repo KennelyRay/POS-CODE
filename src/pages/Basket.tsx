@@ -7,8 +7,6 @@ import {
   CardActionArea,
   Typography,
   IconButton,
-  Snackbar,
-  Alert,
   Chip,
   Dialog,
   DialogTitle,
@@ -70,6 +68,7 @@ import { usePrinter } from '../contexts/PrinterContext';
 import { BasketItem, useBasket } from '../contexts/BasketContext';
 import PredictField, { Highlight } from '../components/PredictField';
 
+import { useNotify } from '../contexts/NotificationContext';
 const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
   if (!(element instanceof HTMLElement)) return false;
   return (
@@ -345,7 +344,7 @@ const Basket: React.FC = () => {
   const { basket, setBasket } = useBasket();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
+  const notify = useNotify();;
   const [customerMoney, setCustomerMoney] = useState<string>('');
   const salesContext = useContext(SalesContext);
   const [showPaymentSummary, setShowPaymentSummary] = useState(false);
@@ -617,17 +616,17 @@ const Basket: React.FC = () => {
     setBasket((prevBasket) => {
       const existingItem = prevBasket.find((item) => item.id === product.id);
       if (existingItem) {
-        setSnackbar({ open: true, message: 'Increased quantity in basket', severity: 'info' });
+        notify('Increased quantity in basket', 'info');
         return prevBasket.map((item) =>
           item.id === product.id
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
-      setSnackbar({ open: true, message: 'Added to basket', severity: 'success' });
+      notify('Added to basket', 'success');
       return [...prevBasket, { ...product, quantity: 1 }];
     });
-  }, [setBasket, setSnackbar]);
+  }, [setBasket, notify]);
 
   // Units sold per product name across all receipts, so predictions favour what sells
   const unitsSold = useMemo(() => {
@@ -760,26 +759,25 @@ const Basket: React.FC = () => {
     }
 
     if (addedCount > 0 && notFoundCount > 0) {
-      setSnackbar({
-        open: true,
-        message: `Added ${addedCount} item${addedCount === 1 ? '' : 's'}. ${notFoundCount} barcode${notFoundCount === 1 ? '' : 's'} not found.`,
-        severity: 'warning',
-      });
+      notify(
+        `Added ${addedCount} item${addedCount === 1 ? '' : 's'}. ${notFoundCount} barcode${notFoundCount === 1 ? '' : 's'} not found.`,
+        'warning'
+      );
       return;
     }
 
     if (addedCount > 1) {
-      setSnackbar({ open: true, message: `Added ${addedCount} items to basket`, severity: 'success' });
+      notify(`Added ${addedCount} items to basket`, 'success');
       return;
     }
 
     if (addedCount === 1 && firstAddedName) {
-      setSnackbar({ open: true, message: `Added ${firstAddedName} to basket`, severity: 'success' });
+      notify(`Added ${firstAddedName} to basket`, 'success');
       return;
     }
 
-    setSnackbar({ open: true, message: 'Product not found', severity: 'error' });
-  }, [setBasket, setSnackbar]);
+    notify('Product not found', 'error');
+  }, [setBasket, notify]);
 
   const scheduleFlushPendingScans = useCallback(() => {
     if (pendingScanFlushTimerRef.current != null) return;
@@ -947,8 +945,8 @@ const Basket: React.FC = () => {
 
   const handleRemoveItem = useCallback((id: string) => {
     setBasket((prevBasket) => prevBasket.filter((item) => item.id !== id));
-    setSnackbar({ open: true, message: 'Removed from basket', severity: 'info' });
-  }, [setBasket, setSnackbar]);
+    notify('Removed from basket', 'info');
+  }, [setBasket, notify]);
 
   const handleCheckout = () => {
     if (basket.length === 0) return;
@@ -958,11 +956,11 @@ const Basket: React.FC = () => {
 
   const handleConfirmPayment = async () => {
     if (!hasValidCustomerMoney) {
-      setSnackbar({ open: true, message: 'Please enter customer money.', severity: 'warning' });
+      notify('Please enter customer money.', 'warning');
       return;
     }
     if (!isCustomerMoneyEnough) {
-      setSnackbar({ open: true, message: 'Customer money must be exact or more.', severity: 'warning' });
+      notify('Customer money must be exact or more.', 'warning');
       return;
     }
 
@@ -1000,26 +998,14 @@ const Basket: React.FC = () => {
       const drawerOpened = await openCashDrawer();
       if (drawerOpened) {
         console.log('Cash drawer opened successfully');
-        setSnackbar({ 
-          open: true, 
-          message: 'Cash drawer opened successfully', 
-          severity: 'success' 
-        });
+        notify('Cash drawer opened successfully', 'success');
       } else {
         console.warn('Failed to open cash drawer - check printer connection');
-        setSnackbar({ 
-          open: true, 
-          message: 'Cash drawer failed to open - check printer connection', 
-          severity: 'warning' 
-        });
+        notify('Cash drawer failed to open - check printer connection', 'warning');
       }
     } catch (error) {
       console.error('Error opening cash drawer:', error);
-      setSnackbar({ 
-        open: true, 
-        message: 'Error opening cash drawer - please check thermal printer', 
-        severity: 'error' 
-      });
+      notify('Error opening cash drawer - please check thermal printer', 'error');
     }
 
     // Prepare receipt data for printing
@@ -1049,25 +1035,22 @@ const Basket: React.FC = () => {
       try {
         const printSuccess = await printReceipt(receiptData);
         if (printSuccess) {
-          setSnackbar({ 
-            open: true, 
-            message: `Payment processed & receipt printed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`, 
-            severity: 'success' 
-          });
+          notify(
+            `Payment processed & receipt printed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`,
+            'success'
+          );
         } else {
-          setSnackbar({ 
-            open: true, 
-            message: `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })} (Print failed)`, 
-            severity: 'warning' 
-          });
+          notify(
+            `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })} (Print failed)`,
+            'warning'
+          );
         }
       } catch (error) {
         console.error('Print error:', error);
-        setSnackbar({ 
-          open: true, 
-          message: `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })} (Print error)`, 
-          severity: 'warning' 
-        });
+        notify(
+          `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })} (Print error)`,
+          'warning'
+        );
       }
     } else {
       // No printing - just show success message
@@ -1075,11 +1058,7 @@ const Basket: React.FC = () => {
         ? `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })} (No printer selected)`
         : `Payment processed! Change due: ₱${paymentDetails?.change.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`;
       
-      setSnackbar({ 
-        open: true, 
-        message, 
-        severity: 'success' 
-      });
+      notify(message, 'success');
     }
     
     // Clear basket and payment details
@@ -1091,20 +1070,20 @@ const Basket: React.FC = () => {
 
   const handlePrintTestReceipt = async () => {
     if (!selectedPrinter) {
-      setSnackbar({ open: true, message: 'No printer selected', severity: 'error' });
+      notify('No printer selected', 'error');
       return;
     }
 
     try {
       const success = await testPrint();
       if (success) {
-        setSnackbar({ open: true, message: 'Test receipt printed successfully!', severity: 'success' });
+        notify('Test receipt printed successfully!', 'success');
       } else {
-        setSnackbar({ open: true, message: 'Failed to print test receipt', severity: 'error' });
+        notify('Failed to print test receipt', 'error');
       }
     } catch (error) {
       console.error('Test print error:', error);
-      setSnackbar({ open: true, message: 'Test print failed', severity: 'error' });
+      notify('Test print failed', 'error');
     }
   };
 
@@ -1115,7 +1094,7 @@ const Basket: React.FC = () => {
     setPaymentDetails(null);
     setShowPaymentSummary(false);
     setShowPrintDialog(false);
-    setSnackbar({ open: true, message: 'Basket cleared', severity: 'info' });
+    notify('Basket cleared', 'info');
   };
 
   const renderProductGrid = (list: Product[]) => (
@@ -1383,16 +1362,6 @@ const Basket: React.FC = () => {
         </Box>
       </Card>
 
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={2000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={snackbar.severity} variant="filled" sx={{ width: '100%' }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
 
       {/* Payment Dialog */}
       <Dialog open={showPaymentSummary} onClose={() => setShowPaymentSummary(false)} maxWidth="xs" fullWidth>

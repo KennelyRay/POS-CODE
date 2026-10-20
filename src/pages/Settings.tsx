@@ -12,8 +12,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  Snackbar,
-  Alert,
   Chip,
   Dialog,
   DialogContent,
@@ -111,6 +109,7 @@ import { saveAs } from 'file-saver';
 import ExcelJS from 'exceljs';
 import { usePrinter } from '../contexts/PrinterContext';
 
+import { useNotify } from '../contexts/NotificationContext';
 const Settings: React.FC = () => {
   const { setThemeName, themeName } = useContext(ThemeContext);
   const storeSettings = useContext(StoreSettingsContext);
@@ -118,7 +117,7 @@ const Settings: React.FC = () => {
   const productsContext = useContext(ProductsContext);
   const { printers, selectedPrinter, setSelectedPrinter, refreshPrinters, testPrint, isLoading } = usePrinter();
 
-  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' | 'error' | 'warning' }>({ open: false, message: '', severity: 'success' });
+  const notify = useNotify();;
   const [storeForm, setStoreForm] = useState({
     storeName: storeSettings.storeName,
     storeAddress: storeSettings.storeAddress,
@@ -194,13 +193,13 @@ const Settings: React.FC = () => {
     storeSettings.setPhoneNumber?.(storeForm.phoneNumber);
     storeSettings.setEmail?.(storeForm.email);
     storeSettings.setBirNumber?.(storeForm.birNumber);
-    setSnackbar({ open: true, message: 'Store settings saved successfully!', severity: 'success' });
+    notify('Store settings saved successfully!', 'success');
   };
 
   const handleExportSales = async () => {
     let sales = salesContext.sales;
     if (!sales || sales.length === 0) {
-      setSnackbar({ open: true, message: 'No sales data to export', severity: 'warning' });
+      notify('No sales data to export', 'warning');
       return;
     }
 
@@ -495,11 +494,7 @@ const Settings: React.FC = () => {
     const buffer = await (workbook as any).xlsx.writeBuffer();
     const data = new Blob([buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     saveAs(data, `sales_report_${new Date().toISOString().split('T')[0]}.xlsx`);
-    setSnackbar({
-      open: true,
-      message: 'Beautiful sales report exported successfully!',
-      severity: 'success',
-    });
+    notify('Beautiful sales report exported successfully!', 'success');
   };
 
   const handleExportAllData = () => {
@@ -520,7 +515,7 @@ const Settings: React.FC = () => {
     const jsonStr = JSON.stringify(data, null, 2);
     const dataBlob = new Blob([jsonStr], { type: 'application/json' });
     saveAs(dataBlob, `pos_backup_${new Date().toISOString().split('T')[0]}.json`);
-    setSnackbar({ open: true, message: 'Full backup exported successfully!', severity: 'success' });
+    notify('Full backup exported successfully!', 'success');
   };
 
   const handleImportData = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -551,10 +546,10 @@ const Settings: React.FC = () => {
           if (data.settings.theme) setThemeName(data.settings.theme);
         }
 
-        setSnackbar({ open: true, message: 'Data imported successfully!', severity: 'success' });
+        notify('Data imported successfully!', 'success');
         setImportDialog(false);
       } catch (error) {
-        setSnackbar({ open: true, message: 'Error importing data. Please check the file format.', severity: 'error' });
+        notify('Error importing data. Please check the file format.', 'error');
       }
     };
     reader.readAsText(file);
@@ -563,7 +558,7 @@ const Settings: React.FC = () => {
   const handleClearAllData = () => {
     salesContext.setSales([]);
     salesContext.setReceipts([]);
-    setSnackbar({ open: true, message: 'All data cleared successfully!', severity: 'success' });
+    notify('All data cleared successfully!', 'success');
   };
 
   // Category management functions
@@ -579,7 +574,7 @@ const Settings: React.FC = () => {
 
   const handleSaveCategory = () => {
     if (!categoryForm.name.trim()) {
-      setSnackbar({ open: true, message: 'Category name is required!', severity: 'error' });
+      notify('Category name is required!', 'error');
       return;
     }
 
@@ -590,7 +585,7 @@ const Settings: React.FC = () => {
         icon: categoryForm.icon,
       };
       productsContext.addCategory(newCategory);
-      setSnackbar({ open: true, message: 'Category added successfully!', severity: 'success' });
+      notify('Category added successfully!', 'success');
     } else if (categoryDialog.mode === 'edit' && categoryDialog.category) {
       const updatedCategory = {
         ...categoryDialog.category,
@@ -598,7 +593,7 @@ const Settings: React.FC = () => {
         icon: categoryForm.icon,
       };
       productsContext.updateCategory(updatedCategory);
-      setSnackbar({ open: true, message: 'Category updated successfully!', severity: 'success' });
+      notify('Category updated successfully!', 'success');
     }
 
     setCategoryDialog({ open: false, mode: 'add' });
@@ -617,14 +612,10 @@ const Settings: React.FC = () => {
       );
       
       if (hasProducts) {
-        setSnackbar({ 
-          open: true, 
-          message: 'Cannot delete category with products. Please move or delete products first.', 
-          severity: 'error' 
-        });
+        notify('Cannot delete category with products. Please move or delete products first.', 'error');
       } else {
         productsContext.deleteCategory(deleteDialog.categoryId);
-        setSnackbar({ open: true, message: 'Category deleted successfully!', severity: 'success' });
+        notify('Category deleted successfully!', 'success');
       }
     }
     setDeleteDialog({ open: false });
@@ -639,7 +630,7 @@ const Settings: React.FC = () => {
     
     const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     saveAs(csvBlob, `categories_${new Date().toISOString().split('T')[0]}.csv`);
-    setSnackbar({ open: true, message: 'Categories exported successfully!', severity: 'success' });
+    notify('Categories exported successfully!', 'success');
   };
 
   const handleImportCategories = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -652,7 +643,7 @@ const Settings: React.FC = () => {
           const lines = csvText.split('\n').map(line => line.trim()).filter(line => line);
           
           if (lines.length === 0) {
-            setSnackbar({ open: true, message: 'CSV file is empty!', severity: 'error' });
+            notify('CSV file is empty!', 'error');
             return;
           }
           
@@ -679,24 +670,12 @@ const Settings: React.FC = () => {
           });
           
           if (importedCount > 0) {
-            setSnackbar({ 
-              open: true, 
-              message: `${importedCount} categories imported successfully!`, 
-              severity: 'success' 
-            });
+            notify(`${importedCount} categories imported successfully!`, 'success');
           } else {
-            setSnackbar({ 
-              open: true, 
-              message: 'No new categories found to import (all categories already exist)', 
-              severity: 'warning' 
-            });
+            notify('No new categories found to import (all categories already exist)', 'warning');
           }
         } catch (error) {
-          setSnackbar({ 
-            open: true, 
-            message: 'Error importing CSV file. Please check file format.', 
-            severity: 'error' 
-          });
+          notify('Error importing CSV file. Please check file format.', 'error');
         }
       };
       reader.readAsText(file);
@@ -1219,11 +1198,7 @@ const Settings: React.FC = () => {
                             onClick={async () => {
                               if (selectedPrinter) {
                                 const success = await testPrint();
-                                setSnackbar({
-                                  open: true,
-                                  message: success ? 'Test receipt printed successfully!' : 'Failed to print test receipt',
-                                  severity: success ? 'success' : 'error'
-                                });
+                                notify(success ? 'Test receipt printed successfully!' : 'Failed to print test receipt', success ? 'success' : 'error');
                               }
                             }}
                             disabled={!selectedPrinter || isLoading}
@@ -2304,17 +2279,6 @@ const Settings: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Snackbar */}
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={3000}
-        onClose={() => setSnackbar({ ...snackbar, open: false })}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity={snackbar.severity} variant="filled" sx={{ width: '100%', borderRadius: 3 }}>
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
     </Box>
   );
 };
