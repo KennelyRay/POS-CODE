@@ -11,12 +11,14 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
+  Switch,
   TextField,
   Typography,
 } from '@mui/material';
@@ -46,13 +48,14 @@ import { useNotify } from '../contexts/NotificationContext';
 import { buildPriceListPages, PriceListCategoryGroup, PriceListPrintContent } from '../components/PriceList';
 import { categoryIcon } from '../utils/categoryIcons';
 import { getLowStockThreshold } from '../utils/preferences';
+import { stockState, tracksStock } from '../utils/stock';
 
 const PAGE_SIZE = 80;
 const UNCATEGORIZED = '__uncategorized__';
 
 type StockFilter = 'all' | 'low' | 'out' | 'nobarcode';
 type SortKey = 'name' | 'price-asc' | 'price-desc' | 'stock-asc' | 'stock-desc' | 'recent';
-type Draft = { id: string; name: string; category: string; price: string; quantity: string; barcodes: string[] };
+type Draft = { id: string; name: string; category: string; price: string; quantity: string; trackStock: boolean; barcodes: string[] };
 
 const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
 const newId = () => `${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -91,7 +94,6 @@ const parseCsv = (text: string): string[][] => {
   return rows.filter((r) => r.some((cell) => cell.trim() !== ''));
 };
 
-const stockState = (quantity: number, lowStock: number) => (quantity <= 0 ? 'out' : quantity <= lowStock ? 'low' : 'ok');
 
 // ---------- list row ----------
 
@@ -153,6 +155,22 @@ const RowRoot = styled('div')(({ theme }) => ({
   '& .row-qty[data-state="low"]': { color: theme.palette.warning.main },
   '& .row-qty[data-state="out"]': { color: theme.palette.error.main },
   '& .row-actions': { justifyContent: 'flex-end' },
+  '& .row-unlimited': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    border: 0,
+    borderRadius: 8,
+    padding: '4px 8px',
+    marginRight: 30,
+    background: 'transparent',
+    color: theme.palette.text.secondary,
+    font: 'inherit',
+    cursor: 'pointer',
+    '& span:first-of-type': { fontSize: '1.25rem', lineHeight: 1, fontWeight: 700 },
+    '&:hover': { backgroundColor: theme.palette.action.hover, color: theme.palette.text.primary },
+  },
+  '& .row-unlimited-label': { ...theme.typography.caption, fontWeight: 600 },
   '& .icon-btn': {
     display: 'grid',
     placeItems: 'center',
@@ -208,7 +226,7 @@ const ProductRow = React.memo(function ProductRow({
   onDuplicate,
   onDelete,
 }: RowProps) {
-  const state = stockState(product.quantity, lowStock);
+  const state = stockState(product, lowStock);
   const barcodes = product.barcodes.filter(Boolean);
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   // Blur is the one place a price is saved; Escape marks the edit as cancelled first
@@ -239,7 +257,7 @@ const ProductRow = React.memo(function ProductRow({
           {product.name || 'Unnamed product'}
         </p>
         <p className="row-meta">
-          <span className="row-meta-category">{product.category || 'Uncategorized'} · Stock {product.quantity} · </span>
+          <span className="row-meta-category">{product.category || 'Uncategorized'} · {state === 'untracked' ? 'Unlimited stock' : `Stock ${product.quantity}`} · </span>
           {barcodes.length ? barcodes.join(', ') : 'No barcode'}
         </p>
       </div>
@@ -278,16 +296,26 @@ const ProductRow = React.memo(function ProductRow({
         )}
       </span>
       <span className="row-stock" onClick={stop}>
-        <button type="button" className="icon-btn stepper" aria-label={`One less ${product.name}`} onClick={() => onStep(product, -1)}>
-          −
-        </button>
-        <span className="row-qty" data-state={state} title={state === 'out' ? 'Out of stock' : state === 'low' ? 'Low stock' : undefined}>
-          {product.quantity}
-          {state !== 'ok' && <span style={{ display: 'block', fontSize: '0.625rem', fontWeight: 700, lineHeight: 1 }}>{state === 'out' ? 'OUT' : 'LOW'}</span>}
-        </span>
-        <button type="button" className="icon-btn stepper" aria-label={`One more ${product.name}`} onClick={() => onStep(product, 1)}>
-          +
-        </button>
+        {state === 'untracked' ? (
+          // Unlimited stock: no counter to step; opening the product lets you start tracking
+          <button type="button" className="row-unlimited" title="Unlimited stock. Click to track stock for this product." onClick={() => onOpen(product)}>
+            <span aria-hidden>∞</span>
+            <span className="row-unlimited-label">Unlimited</span>
+          </button>
+        ) : (
+          <>
+            <button type="button" className="icon-btn stepper" aria-label={`One less ${product.name}`} onClick={() => onStep(product, -1)}>
+              −
+            </button>
+            <span className="row-qty" data-state={state} title={state === 'out' ? 'Out of stock' : state === 'low' ? 'Low stock' : undefined}>
+              {product.quantity}
+              {state !== 'ok' && <span style={{ display: 'block', fontSize: '0.625rem', fontWeight: 700, lineHeight: 1 }}>{state === 'out' ? 'OUT' : 'LOW'}</span>}
+            </span>
+            <button type="button" className="icon-btn stepper" aria-label={`One more ${product.name}`} onClick={() => onStep(product, 1)}>
+              +
+            </button>
+          </>
+        )}
       </span>
       <span className="row-actions" onClick={stop}>
         <button type="button" className="icon-btn" title="Duplicate" aria-label={`Duplicate ${product.name}`} onClick={() => onDuplicate(product)}>
@@ -384,6 +412,7 @@ const ManageProducts: React.FC = () => {
   const [nameError, setNameError] = useState('');
   const [priceError, setPriceError] = useState('');
   const nameRef = useRef<HTMLInputElement | null>(null);
+  const stockRef = useRef<HTMLInputElement | null>(null);
 
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -422,14 +451,18 @@ const ManageProducts: React.FC = () => {
     let low = 0;
     let out = 0;
     let noBarcode = 0;
+    let tracked = 0;
     for (const p of products) {
-      value += p.price * Math.max(0, p.quantity);
-      const state = stockState(p.quantity, lowStock);
+      const state = stockState(p, lowStock);
+      if (state !== 'untracked') {
+        tracked += 1;
+        value += p.price * Math.max(0, p.quantity);
+      }
       if (state === 'low') low += 1;
       if (state === 'out') out += 1;
       if (!p.barcodes.some((b) => b.trim())) noBarcode += 1;
     }
-    return { value, low, out, noBarcode };
+    return { value, low, out, noBarcode, tracked };
   }, [lowStock, products]);
 
   const deferredSearch = useDeferredValue(search);
@@ -438,7 +471,7 @@ const ManageProducts: React.FC = () => {
   const visibleProducts = useMemo(() => {
     const list = products.filter((p) => {
       if (categoryFilter !== 'all' && (p.category || UNCATEGORIZED) !== categoryFilter) return false;
-      const state = stockState(p.quantity, lowStock);
+      const state = stockState(p, lowStock);
       if (stockFilter === 'low' && state !== 'low') return false;
       if (stockFilter === 'out' && state !== 'out') return false;
       if (stockFilter === 'nobarcode' && p.barcodes.some((b) => b.trim())) return false;
@@ -446,12 +479,18 @@ const ManageProducts: React.FC = () => {
       return p.name.toLowerCase().includes(query) || p.barcodes.some((b) => b.toLowerCase().includes(query));
     });
     const byName = (a: Product, b: Product) => a.name.localeCompare(b.name);
+    const byStockThen = (a: Product, b: Product, direction: 1 | -1) => {
+      const untracked = Number(!tracksStock(a)) - Number(!tracksStock(b));
+      if (untracked || !tracksStock(a)) return untracked;
+      return direction * (a.quantity - b.quantity);
+    };
     const sorters: Record<SortKey, (a: Product, b: Product) => number> = {
       name: byName,
       'price-asc': (a, b) => a.price - b.price || byName(a, b),
       'price-desc': (a, b) => b.price - a.price || byName(a, b),
-      'stock-asc': (a, b) => a.quantity - b.quantity || byName(a, b),
-      'stock-desc': (a, b) => b.quantity - a.quantity || byName(a, b),
+      // Unlimited-stock products sort after every tracked one, whichever way, by name among themselves
+      'stock-asc': (a, b) => byStockThen(a, b, 1) || byName(a, b),
+      'stock-desc': (a, b) => byStockThen(a, b, -1) || byName(a, b),
       recent: (a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }),
     };
     return list.sort(sorters[sort]);
@@ -488,8 +527,16 @@ const ManageProducts: React.FC = () => {
   const openEditor = useCallback((product?: Product, presetBarcode?: string) => {
     setDraft(
       product
-        ? { id: product.id, name: product.name, category: product.category, price: String(product.price), quantity: String(product.quantity), barcodes: product.barcodes.filter(Boolean) }
-        : { id: '', name: '', category: '', price: '', quantity: '', barcodes: presetBarcode ? [presetBarcode] : [] }
+        ? {
+            id: product.id,
+            name: product.name,
+            category: product.category,
+            price: String(product.price),
+            quantity: String(product.quantity),
+            trackStock: tracksStock(product),
+            barcodes: product.barcodes.filter(Boolean),
+          }
+        : { id: '', name: '', category: '', price: '', quantity: '', trackStock: false, barcodes: presetBarcode ? [presetBarcode] : [] }
     );
     setBarcodeInput('');
     setBarcodeError('');
@@ -551,7 +598,17 @@ const ManageProducts: React.FC = () => {
     const category = existing ? existing.name : typed;
     if (typed && !existing) addCategory({ id: newId(), name: typed });
 
-    const product: Product = { id: draft.id || newId(), name, category, price, quantity: Number.isFinite(quantity) ? quantity : 0, barcodes };
+    // With tracking off the last counted quantity is kept, so switching it back on resumes from there
+    const previous = products.find((p) => p.id === draft.id);
+    const product: Product = {
+      id: draft.id || newId(),
+      name,
+      category,
+      price,
+      quantity: draft.trackStock ? (Number.isFinite(quantity) ? quantity : 0) : previous?.quantity ?? 0,
+      trackStock: draft.trackStock,
+      barcodes,
+    };
     if (draft.id) {
       updateProduct(product);
       notify(`Saved ${name}`, 'success');
@@ -561,7 +618,7 @@ const ManageProducts: React.FC = () => {
     }
     if (keepOpen) {
       // Next product starts in the same category, the usual way stock gets entered
-      setDraft({ id: '', name: '', category, price: '', quantity: '', barcodes: [] });
+      setDraft({ id: '', name: '', category, price: '', quantity: '', trackStock: draft.trackStock, barcodes: [] });
       setBarcodeInput('');
       setBarcodeError('');
       setNameError('');
@@ -714,6 +771,7 @@ const ManageProducts: React.FC = () => {
             category: get('category'),
             price: parseFloat(get('price')) || 0,
             quantity: parseInt(get('quantity'), 10) || 0,
+            trackStock: col('trackstock') >= 0 ? get('trackstock').toLowerCase() === 'true' : undefined,
             barcodes: get('barcodes')
               .split(';')
               .map((b) => b.trim())
@@ -744,7 +802,7 @@ const ManageProducts: React.FC = () => {
     const additions: Product[] = [];
     for (const row of importPreview.rows) {
       const match = byId.get(row.id) ?? row.barcodes.map((b) => byBarcode.get(b)).find(Boolean) ?? byName.get(row.name.toLowerCase());
-      if (match && !updates.has(match.id)) updates.set(match.id, { ...row, id: match.id });
+      if (match && !updates.has(match.id)) updates.set(match.id, { ...row, id: match.id, trackStock: row.trackStock ?? match.trackStock });
       else additions.push(byId.has(row.id) ? { ...row, id: newId() + additions.length } : row);
     }
     return { updates, additions };
@@ -907,7 +965,12 @@ const ManageProducts: React.FC = () => {
           active={stockFilter === 'nobarcode'}
           onClick={stats.noBarcode ? () => setStockFilter(stockFilter === 'nobarcode' ? 'all' : 'nobarcode') : undefined}
         />
-        <StatTile icon={<ValueIcon />} label="Inventory value" value={formatPeso(stats.value)} caption="Price × stock on hand" />
+        <StatTile
+          icon={<ValueIcon />}
+          label="Inventory value"
+          value={formatPeso(stats.value)}
+          caption={stats.tracked === products.length ? 'Price × stock on hand' : `${stats.tracked} of ${products.length} products track stock`}
+        />
         <StatTile
           icon={<LowIcon />}
           label="Low stock"
@@ -1206,15 +1269,46 @@ const ManageProducts: React.FC = () => {
                   inputProps={{ min: 0, step: 0.01, inputMode: 'decimal' }}
                   InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
                 />
-                <TextField
-                  label="Stock on hand"
-                  type="number"
-                  value={draft.quantity}
-                  onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
-                  helperText={draft.quantity !== '' && Number(draft.quantity) <= lowStock ? (Number(draft.quantity) <= 0 ? 'Out of stock' : 'Low stock') : ' '}
-                  inputProps={{ min: 0, step: 1, inputMode: 'numeric' }}
-                />
+                {draft.trackStock ? (
+                  <TextField
+                    label="Stock on hand"
+                    type="number"
+                    value={draft.quantity}
+                    onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
+                    helperText={draft.quantity !== '' && Number(draft.quantity) <= lowStock ? (Number(draft.quantity) <= 0 ? 'Out of stock' : 'Low stock') : ' '}
+                    inputProps={{ min: 0, step: 1, inputMode: 'numeric' }}
+                    inputRef={stockRef}
+                  />
+                ) : (
+                  <TextField label="Stock" value="∞ Unlimited" disabled helperText=" " />
+                )}
               </Box>
+              <FormControlLabel
+                sx={{ mt: -1.5, alignItems: 'flex-start', '& .MuiFormControlLabel-label': { pt: 0.75 } }}
+                control={
+                  <Switch
+                    checked={draft.trackStock}
+                    onChange={(e) => {
+                      const on = e.target.checked;
+                      // An untouched new product starts counting from 0
+                      setDraft({ ...draft, trackStock: on, quantity: on && draft.quantity === '' ? '0' : draft.quantity });
+                      if (on) window.setTimeout(() => stockRef.current?.select(), 0);
+                    }}
+                  />
+                }
+                label={
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>
+                      Track stock
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {draft.trackStock
+                        ? 'Counted, with low- and out-of-stock warnings.'
+                        : 'Off: this product never runs out. Turn on to count how many are left.'}
+                    </Typography>
+                  </Box>
+                }
+              />
               <Box>
                 <TextField
                   fullWidth

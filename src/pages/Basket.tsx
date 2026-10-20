@@ -39,6 +39,8 @@ import { usePrinter } from '../contexts/PrinterContext';
 import { BasketItem, useBasket } from '../contexts/BasketContext';
 import PredictField, { Highlight } from '../components/PredictField';
 import { categoryIcon } from '../utils/categoryIcons';
+import { tracksStock } from '../utils/stock';
+import { getLowStockThreshold } from '../utils/preferences';
 
 import { useNotify } from '../contexts/NotificationContext';
 const isEditableElement = (element: EventTarget | null): element is HTMLElement => {
@@ -158,9 +160,12 @@ const ProductTile = React.memo(function ProductTile({ product, quantityInBasket,
             <Typography variant="h6" color="primary.main" sx={{ lineHeight: 1.2 }}>
               {formatPeso(product.price)}
             </Typography>
-            <Typography variant="caption" color={product.quantity <= 0 ? 'error.main' : 'text.secondary'}>
-              Stock: {product.quantity}
-            </Typography>
+            {/* Only products that track stock show a count */}
+            {tracksStock(product) && (
+              <Typography variant="caption" color={product.quantity <= 0 ? 'error.main' : 'text.secondary'}>
+                Stock: {product.quantity}
+              </Typography>
+            )}
           </Box>
           {inBasket ? (
             <Chip size="small" color="primary" label={`×${quantityInBasket}`} />
@@ -309,7 +314,7 @@ const CartLine = React.memo(function CartLine({
 });
 
 const Basket: React.FC = () => {
-  const { products, categories } = useContext(ProductsContext);
+  const { products, categories, adjustStock } = useContext(ProductsContext);
   const storeSettings = useContext(StoreSettingsContext);
   const { recordGrossSales } = useContext(GrossSalesContext);
   const { selectedPrinter, printReceipt, testPrint, openCashDrawer } = usePrinter();
@@ -496,7 +501,7 @@ const Basket: React.FC = () => {
         const base = matchScore(product, q, tokens);
         if (base < 0) continue;
         const popularity = Math.min(40, Math.log2(1 + (unitsSold.get(product.name) ?? 0)) * 8);
-        scored.push({ product, score: base + popularity + (product.quantity > 0 ? 5 : 0) });
+        scored.push({ product, score: base + popularity + (!tracksStock(product) || product.quantity > 0 ? 5 : 0) });
       }
       scored.sort((a, b) => b.score - a.score || a.product.name.localeCompare(b.product.name));
       return scored.slice(0, PREDICTION_LIMIT).map((entry) => entry.product);
@@ -537,8 +542,12 @@ const Basket: React.FC = () => {
         </Box>
         <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
           <Typography fontWeight={700}>{formatPeso(product.price)}</Typography>
-          <Typography variant="caption" color={inBasket ? 'primary.main' : product.quantity <= 0 ? 'error.main' : 'text.secondary'} fontWeight={inBasket ? 700 : 400}>
-            {inBasket ? `×${inBasket} in basket` : `Stock: ${product.quantity}`}
+          <Typography
+            variant="caption"
+            color={inBasket ? 'primary.main' : tracksStock(product) && product.quantity <= 0 ? 'error.main' : 'text.secondary'}
+            fontWeight={inBasket ? 700 : 400}
+          >
+            {inBasket ? `×${inBasket} in basket` : tracksStock(product) ? `Stock: ${product.quantity}` : ''}
           </Typography>
         </Box>
       </Box>
@@ -836,6 +845,23 @@ const Basket: React.FC = () => {
 
     // Record gross sales
     recordGrossSales(currentPaymentDetails.total);
+
+    // Take what was sold out of stock for products that track it, and say which ones ran low
+    const sold = new Map<string, number>();
+    for (const item of basket) sold.set(item.id, (sold.get(item.id) ?? 0) + item.quantity);
+    adjustStock(Array.from(sold, ([id, quantity]) => ({ id, delta: -quantity })));
+    const lowStock = getLowStockThreshold();
+    const runningLow: string[] = [];
+    for (const [id, quantity] of sold) {
+      const product = products.find((p) => p.id === id);
+      if (!product || !tracksStock(product)) continue;
+      const left = Math.max(0, product.quantity - quantity);
+      if (left === 0) runningLow.push(`${product.name} is now out of stock`);
+      else if (left <= lowStock) runningLow.push(`${product.name}: ${left} left`);
+    }
+    if (runningLow.length) {
+      notify(runningLow.length > 3 ? `${runningLow.slice(0, 3).join(' · ')} · and ${runningLow.length - 3} more running low` : runningLow.join(' · '), 'warning');
+    }
 
     // Automatically open cash drawer
     try {

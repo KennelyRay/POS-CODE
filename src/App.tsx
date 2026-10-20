@@ -119,8 +119,11 @@ export interface Product {
   barcodes: string[];
   name: string;
   price: number;
+  /** Stock on hand; only counts when trackStock is on */
   quantity: number;
   category: string;
+  /** Off (or missing) means unlimited stock */
+  trackStock?: boolean;
 }
 
 export interface Category {
@@ -140,6 +143,8 @@ interface ProductsContextType {
   deleteCategory: (id: string) => void;
   exportProducts: (products: Product[], filename: string) => void;
   importProducts: (products: Product[]) => Promise<void>;
+  /** Changes stock by `delta` for products that track stock; unlimited products are left alone. */
+  adjustStock: (changes: Array<{ id: string; delta: number }>) => void;
 }
 
 export const ProductsContext = createContext<ProductsContextType>({
@@ -153,6 +158,7 @@ export const ProductsContext = createContext<ProductsContextType>({
   deleteCategory: () => {},
   exportProducts: () => {},
   importProducts: async () => {},
+  adjustStock: () => {},
 });
 
 function App() {
@@ -463,6 +469,19 @@ function App() {
     }
   };
 
+  // One state update and one save for a whole sale, applied to the latest stock
+  const adjustStock = (changes: Array<{ id: string; delta: number }>) => {
+    const deltas = new Map<string, number>();
+    for (const { id, delta } of changes) deltas.set(id, (deltas.get(id) ?? 0) + delta);
+    setProducts(prev => {
+      const newProducts = prev.map(p =>
+        p.trackStock === true && deltas.has(p.id) ? { ...p, quantity: Math.max(0, p.quantity + deltas.get(p.id)!) } : p
+      );
+      localStorage.setItem('pos_products', JSON.stringify(newProducts));
+      return newProducts;
+    });
+  };
+
   const deleteProduct = (id: string) => {
     try {
       setProducts(prev => {
@@ -558,7 +577,8 @@ function App() {
       name: product.name,
       price: product.price,
       quantity: product.quantity,
-      category: product.category
+      category: product.category,
+      trackStock: product.trackStock === true,
     }));
     exportToCSV(exportData, filename);
   };
@@ -574,7 +594,8 @@ function App() {
         name: row.name || '',
         price: parseFloat(row.price?.toString() || '0'),
         quantity: parseInt(row.quantity?.toString() || '0'),
-        category: row.category || ''
+        category: row.category || '',
+        trackStock: row.trackStock === true || String(row.trackStock).toLowerCase() === 'true',
       }));
       setProducts(newProducts);
       localStorage.setItem('pos_products', JSON.stringify(newProducts));
@@ -605,7 +626,8 @@ function App() {
           updateCategory,
           deleteCategory,
           exportProducts,
-          importProducts
+          importProducts,
+          adjustStock
         }}>
           <SalesContext.Provider value={{ sales, receipts, addSale, addReceipt, deleteReceipt, deleteReceipts, setSales, setReceipts }}>
             <GrossSalesContext.Provider value={{ 

@@ -44,6 +44,7 @@ import ExcelJS from 'exceljs';
 import { usePrinter } from '../contexts/PrinterContext';
 import { useNotify } from '../contexts/NotificationContext';
 import { CATEGORY_ICONS, iconByName } from '../utils/categoryIcons';
+import { tracksStock } from '../utils/stock';
 import { BACKUP_ITEMS, buildBackup, describeValue, ParsedBackup, parseBackup } from '../utils/backup';
 import {
   DEFAULT_LOW_STOCK,
@@ -878,8 +879,8 @@ const Settings: React.FC = () => {
               </Button>
             </Box>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-              Right now {products.filter((p) => p.quantity > 0 && p.quantity <= (Number(lowStock) || 0)).length} products would be low on stock and{' '}
-              {products.filter((p) => p.quantity <= 0).length} are out.
+              Of the {products.filter(tracksStock).length} products that track stock, {products.filter((p) => tracksStock(p) && p.quantity > 0 && p.quantity <= (Number(lowStock) || 0)).length} would be
+              low and {products.filter((p) => tracksStock(p) && p.quantity <= 0).length} are out. The rest have unlimited stock; switch on Track stock on a product to count it.
             </Typography>
           </Box>
         );
