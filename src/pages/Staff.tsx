@@ -1,54 +1,42 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
   Card,
-  CardContent,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
-  Grid,
-  TextField,
-  Typography,
   IconButton,
-  Avatar,
-  Chip,
-  FormControl,
-  InputLabel,
-  Select,
+  InputAdornment,
   MenuItem,
-  Divider,
-  Paper,
   Tab,
   Tabs,
-  Stack,
+  TextField,
+  ToggleButton,
+  ToggleButtonGroup,
+  Tooltip,
+  Typography,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
   Add as AddIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
-  CheckCircle as PresentIcon,
-  Cancel as AbsentIcon,
-  CalendarMonth as CalendarIcon,
-  AttachMoney as SalaryIcon,
-  Person as PersonIcon,
-  People as PeopleIcon,
-  Schedule as ScheduleIcon,
-  Email as EmailIcon,
-  Phone as PhoneIcon,
-  Work as WorkIcon,
-  DateRange as DateRangeIcon,
-  Today as TodayIcon,
+  CheckCircleRounded as PresentIcon,
+  CancelRounded as AbsentIcon,
+  ChevronLeft as PrevIcon,
+  ChevronRight as NextIcon,
+  DeleteOutline as DeleteIcon,
+  DoneAll as AllPresentIcon,
+  EditOutlined as EditIcon,
+  FileDownloadOutlined as ExportIcon,
+  HelpOutline as UnrecordedIcon,
+  PeopleOutline as PeopleIcon,
+  PhoneOutlined as PhoneIcon,
+  EmailOutlined as EmailIcon,
 } from '@mui/icons-material';
-import { Calendar, momentLocalizer } from 'react-big-calendar';
-import moment from 'moment';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
-
+import { saveAs } from 'file-saver';
 import { useNotify } from '../contexts/NotificationContext';
-const localizer = momentLocalizer(moment);
 
-// Staff interface
 interface StaffMember {
   id: string;
   name: string;
@@ -56,1057 +44,746 @@ interface StaffMember {
   email: string;
   phone: string;
   avatar?: string;
-  startDate: Date;
+  startDate: Date | string;
+  /** Remembered by the payroll table */
+  dailyRate?: number;
 }
 
-// Attendance interface
 export interface AttendanceRecord {
   id: string;
   staffId: string;
-  date: string; // YYYY-MM-DD format
+  date: string; // YYYY-MM-DD
   status: 'present' | 'absent';
   notes?: string;
 }
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
+type Status = 'present' | 'absent';
+type PayPeriod = 'this-month' | 'last-month' | 'first-half' | 'second-half' | 'custom';
 
-function TabPanel(props: TabPanelProps) {
-  const { children, value, index, ...other } = props;
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`staff-tabpanel-${index}`}
-      aria-labelledby={`staff-tab-${index}`}
-      {...other}
+const AVATAR_COLORS = ['#0f766e', '#b45309', '#7c3aed', '#be185d', '#1d4ed8', '#15803d', '#c2410c', '#0e7490'];
+const pad = (n: number) => String(n).padStart(2, '0');
+// Dates stay as local YYYY-MM-DD strings so a day never shifts with the timezone
+const isoDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const fromIso = (s: string) => {
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
+const formatPeso = (v: number) => v.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+const formatDay = (s: string) => fromIso(s).toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' });
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join('') || '?';
+const avatarColor = (name: string) => {
+  let h = 0;
+  for (let i = 0; i < name.length; i += 1) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+};
+const startDateIso = (s: StaffMember) => (typeof s.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.startDate) ? s.startDate : isoDate(new Date(s.startDate)));
+const tenure = (s: StaffMember) => {
+  const start = fromIso(startDateIso(s));
+  const months = (new Date().getFullYear() - start.getFullYear()) * 12 + new Date().getMonth() - start.getMonth();
+  if (months < 1) return 'Started this month';
+  if (months < 12) return `${months} month${months !== 1 ? 's' : ''}`;
+  const years = Math.floor(months / 12);
+  return `${years} year${years !== 1 ? 's' : ''}${months % 12 ? ` ${months % 12} mo` : ''}`;
+};
+
+const Avatar: React.FC<{ name: string; size?: number }> = ({ name, size = 38 }) => (
+  <Box
+    aria-hidden
+    sx={{ width: size, height: size, flexShrink: 0, borderRadius: '50%', display: 'grid', placeItems: 'center', bgcolor: avatarColor(name), color: '#fff', fontWeight: 700, fontSize: size * 0.38 }}
+  >
+    {initials(name)}
+  </Box>
+);
+
+const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: string; caption: string; tone?: 'success' | 'error' | 'warning' }> = ({ icon, label, value, caption, tone }) => (
+  <Card sx={{ p: 2, display: 'flex', gap: 1.5, alignItems: 'flex-start', minWidth: 0 }}>
+    <Box
+      sx={{
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: '10px',
+        display: { xs: 'none', sm: 'grid' },
+        placeItems: 'center',
+        color: tone ? `${tone}.main` : 'primary.main',
+        bgcolor: (t) => alpha(tone ? t.palette[tone].main : t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+      }}
     >
-      {value === index && <Box sx={{ py: 3 }}>{children}</Box>}
-    </div>
-  );
-}
+      {icon}
+    </Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="body2" color="text.secondary" fontWeight={600}>
+        {label}
+      </Typography>
+      <Typography variant="h5" component="p" sx={{ lineHeight: 1.3, fontSize: { xs: '1.125rem', sm: '1.375rem' } }}>
+        {value}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" component="p" sx={{ lineHeight: 1.4 }}>
+        {caption}
+      </Typography>
+    </Box>
+  </Card>
+);
+
+const periodRange = (period: PayPeriod, custom: { start: string; end: string }) => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  switch (period) {
+    case 'this-month':
+      return { start: isoDate(new Date(y, m, 1)), end: isoDate(new Date(y, m + 1, 0)) };
+    case 'last-month':
+      return { start: isoDate(new Date(y, m - 1, 1)), end: isoDate(new Date(y, m, 0)) };
+    case 'first-half':
+      return { start: isoDate(new Date(y, m, 1)), end: isoDate(new Date(y, m, 15)) };
+    case 'second-half':
+      return { start: isoDate(new Date(y, m, 16)), end: isoDate(new Date(y, m + 1, 0)) };
+    default:
+      return custom;
+  }
+};
 
 const Staff: React.FC = () => {
-  const [tabValue, setTabValue] = useState(0);
-  const [staff, setStaff] = useState<StaffMember[]>(() => {
-    const stored = localStorage.getItem('pos_staff');
-    return stored ? JSON.parse(stored) : [];
+  const notify = useNotify();
+  const [tab, setTab] = useState<'today' | 'directory' | 'attendance' | 'payroll'>('today');
+
+  const [staff, setStaff] = useState<StaffMember[]>(() => JSON.parse(localStorage.getItem('pos_staff') || '[]'));
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => JSON.parse(localStorage.getItem('pos_attendance') || '[]'));
+  useEffect(() => localStorage.setItem('pos_staff', JSON.stringify(staff)), [staff]);
+  useEffect(() => localStorage.setItem('pos_attendance', JSON.stringify(attendance)), [attendance]);
+
+  const today = isoDate(new Date());
+
+  // Staff form
+  const [editing, setEditing] = useState<StaffMember | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState({ name: '', position: '', email: '', phone: '', startDate: today, dailyRate: '' });
+  const [formErrors, setFormErrors] = useState<{ name?: string; position?: string }>({});
+  const [toDelete, setToDelete] = useState<StaffMember | null>(null);
+
+  // Attendance grid month
+  const [gridMonth, setGridMonth] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
   });
 
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
-    const stored = localStorage.getItem('pos_attendance');
-    return stored ? JSON.parse(stored) : [];
-  });
+  // Payroll
+  const [period, setPeriod] = useState<PayPeriod>('this-month');
+  const [custom, setCustom] = useState(() => periodRange('this-month', { start: '', end: '' }));
+  const [deductions, setDeductions] = useState<Record<string, string>>({});
+  const [rateDrafts, setRateDrafts] = useState<Record<string, string>>({});
 
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [attendanceDialogOpen, setAttendanceDialogOpen] = useState(false);
-  const [editingStaff, setEditingStaff] = useState<StaffMember | null>(null);
-  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
-  const notify = useNotify();;
+  // ---------- lookups ----------
 
-  const [formData, setFormData] = useState<Omit<StaffMember, 'id'>>({
-    name: '',
-    position: '',
-    email: '',
-    phone: '',
-    startDate: new Date(),
-  });
-
-  const [attendanceStatus, setAttendanceStatus] = useState<'present' | 'absent'>('present');
-  const [attendanceNotes, setAttendanceNotes] = useState('');
-
-  const [salaryCalculation, setSalaryCalculation] = useState({
-    selectedStaffId: '',
-    dailyRate: '',
-    startDate: moment().startOf('month').format('YYYY-MM-DD'),
-    endDate: moment().endOf('month').format('YYYY-MM-DD'),
-    creditDeduction: '',
-    presentDays: 0,
-    grossSalary: 0,
-    finalSalary: 0,
-  });
-
-  // 1. Add state for calendar attendance editing
-  const [calendarAttendanceDialogOpen, setCalendarAttendanceDialogOpen] = useState(false);
-  const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
-  const [calendarAttendanceDraft, setCalendarAttendanceDraft] = useState<Record<string, { status: 'present' | 'absent', notes: string }>>({});
-
-  // Save to localStorage whenever staff or attendance changes
-  useEffect(() => {
-    localStorage.setItem('pos_staff', JSON.stringify(staff));
-  }, [staff]);
-
-  useEffect(() => {
-    localStorage.setItem('pos_attendance', JSON.stringify(attendance));
+  const byKey = useMemo(() => {
+    const map = new Map<string, AttendanceRecord>();
+    for (const a of attendance) map.set(`${a.staffId}|${a.date}`, a);
+    return map;
   }, [attendance]);
 
-  // Calculate statistics
-  const today = moment().format('YYYY-MM-DD');
-  const todayAttendance = attendance.filter(a => a.date === today);
-  const presentToday = todayAttendance.filter(a => a.status === 'present').length;
-  const absentToday = todayAttendance.filter(a => a.status === 'absent').length;
-  const totalStaff = staff.length;
-  const notRecordedToday = totalStaff - presentToday - absentToday;
+  const statusOn = (staffId: string, date: string) => byKey.get(`${staffId}|${date}`)?.status;
 
-  const resetForm = () => {
-    setFormData({
-      name: '',
-      position: '',
-      email: '',
-      phone: '',
-      startDate: new Date(),
+  const todayStats = useMemo(() => {
+    let present = 0;
+    let absent = 0;
+    for (const s of staff) {
+      const st = byKey.get(`${s.id}|${today}`)?.status;
+      if (st === 'present') present += 1;
+      if (st === 'absent') absent += 1;
+    }
+    return { present, absent, unrecorded: staff.length - present - absent };
+  }, [byKey, staff, today]);
+
+  const monthPrefix = today.slice(0, 7);
+  const presentThisMonth = (id: string) => attendance.filter((a) => a.staffId === id && a.status === 'present' && a.date.startsWith(monthPrefix)).length;
+
+  // ---------- attendance ----------
+
+  // One place that writes a day's status; null clears it
+  const setStatus = (staffId: string, date: string, status: Status | null, notes?: string) => {
+    setAttendance((prev) => {
+      const existing = prev.find((a) => a.staffId === staffId && a.date === date);
+      if (status === null) return prev.filter((a) => a !== existing);
+      if (existing) return prev.map((a) => (a === existing ? { ...a, status, notes: notes ?? a.notes } : a));
+      return [...prev, { id: `${Date.now()}${Math.floor(Math.random() * 1000)}`, staffId, date, status, notes: notes ?? '' }];
     });
   };
 
-  const handleSalaryInputChange = (field: string, value: string) => {
-    setSalaryCalculation(prev => ({
-      ...prev,
-      [field]: value,
-    }));
+  const setNote = (staffId: string, date: string, notes: string) => {
+    setAttendance((prev) => prev.map((a) => (a.staffId === staffId && a.date === date ? { ...a, notes } : a)));
   };
 
-  const getTodayAttendance = (staffId: string) => {
-    return attendance.find(a => a.staffId === staffId && a.date === today);
-  };
-
-  const handleStaffCardClick = (staffMember: StaffMember) => {
-    const existingRecord = attendance.find(a => a.staffId === staffMember.id && a.date === today);
-    
-    setSelectedStaff(staffMember);
-    if (existingRecord) {
-      setAttendanceStatus(existingRecord.status);
-      setAttendanceNotes(existingRecord.notes || '');
-    } else {
-      setAttendanceStatus('present');
-      setAttendanceNotes('');
-    }
-    setAttendanceDialogOpen(true);
-  };
-
-  const openEditDialog = (s: StaffMember) => {
-    setEditingStaff(s);
-    setFormData({
-      name: s.name,
-      position: s.position,
-      email: s.email,
-      phone: s.phone,
-      startDate: s.startDate,
+  const markAllPresent = () => {
+    const unrecorded = staff.filter((s) => !statusOn(s.id, today));
+    if (!unrecorded.length) return;
+    const stamp = Date.now();
+    setAttendance((prev) => [...prev, ...unrecorded.map((s, i) => ({ id: `${stamp}${i}`, staffId: s.id, date: today, status: 'present' as const, notes: '' }))]);
+    const ids = new Set(unrecorded.map((s) => s.id));
+    notify(`Marked ${unrecorded.length} present`, {
+      severity: 'success',
+      action: { label: 'Undo', onClick: () => setAttendance((prev) => prev.filter((a) => !(a.date === today && ids.has(a.staffId) && a.id.startsWith(String(stamp))))) },
     });
-    setDialogOpen(true);
   };
 
-  const handleDeleteStaff = (id: string) => {
-    setStaff(prev => prev.filter(s => s.id !== id));
-    setAttendance(prev => prev.filter(a => a.staffId !== id));
-    notify('Staff member deleted successfully!', 'success');
+  // Grid cell click cycles: not recorded -> present -> absent -> not recorded
+  const cycleCell = (staffId: string, date: string) => {
+    const current = statusOn(staffId, date);
+    setStatus(staffId, date, current === undefined ? 'present' : current === 'present' ? 'absent' : null);
   };
 
-  const handleUpdateStaff = () => {
-    if (!editingStaff || !formData.name || !formData.position) {
-      notify('Please fill in required fields', 'error');
-      return;
-    }
+  // ---------- staff CRUD ----------
 
-    const updatedStaff: StaffMember = {
-      ...formData,
-      id: editingStaff.id,
+  const openForm = (member?: StaffMember) => {
+    setEditing(member ?? null);
+    setForm(
+      member
+        ? { name: member.name, position: member.position, email: member.email, phone: member.phone, startDate: startDateIso(member), dailyRate: member.dailyRate ? String(member.dailyRate) : '' }
+        : { name: '', position: '', email: '', phone: '', startDate: today, dailyRate: '' }
+    );
+    setFormErrors({});
+    setFormOpen(true);
+  };
+
+  const saveForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors: typeof formErrors = {};
+    if (!form.name.trim()) errors.name = 'Enter a name';
+    if (!form.position.trim()) errors.position = 'Enter a position, e.g. Cashier';
+    setFormErrors(errors);
+    if (errors.name || errors.position) return;
+    const rate = parseFloat(form.dailyRate);
+    const member: StaffMember = {
+      id: editing?.id ?? Date.now().toString(),
+      name: form.name.trim(),
+      position: form.position.trim(),
+      email: form.email.trim(),
+      phone: form.phone.trim(),
+      startDate: form.startDate || today,
+      dailyRate: Number.isFinite(rate) && rate > 0 ? rate : undefined,
     };
-
-    setStaff(prev => prev.map(s => s.id === editingStaff.id ? updatedStaff : s));
-    notify('Staff member updated successfully!', 'success');
-    setDialogOpen(false);
-    setEditingStaff(null);
-    resetForm();
+    setStaff((prev) => (editing ? prev.map((s) => (s.id === editing.id ? member : s)) : [...prev, member]));
+    setFormOpen(false);
+    notify(editing ? `Saved ${member.name}` : `Added ${member.name}`, 'success');
   };
 
-  const handleAddStaff = () => {
-    if (!formData.name || !formData.position) {
-      notify('Please fill in required fields', 'error');
-      return;
-    }
-
-    const newStaff: StaffMember = {
-      ...formData,
-      id: Date.now().toString(),
-    };
-
-    setStaff(prev => [...prev, newStaff]);
-    notify('Staff member added successfully!', 'success');
-    setDialogOpen(false);
-    resetForm();
-  };
-
-  const handleRecordAttendance = () => {
-    if (!selectedStaff) return;
-
-    const existingRecord = attendance.find(a => a.staffId === selectedStaff.id && a.date === today);
-
-    if (existingRecord) {
-      const updatedRecord: AttendanceRecord = {
-        ...existingRecord,
-        status: attendanceStatus,
-        notes: attendanceNotes,
-      };
-      setAttendance(prev => prev.map(a => a.id === existingRecord.id ? updatedRecord : a));
-      notify('Attendance updated successfully!', 'success');
-    } else {
-      const newRecord: AttendanceRecord = {
-        id: Date.now().toString(),
-        staffId: selectedStaff.id,
-        date: today,
-        status: attendanceStatus,
-        notes: attendanceNotes,
-      };
-      setAttendance(prev => [...prev, newRecord]);
-      notify('Attendance recorded successfully!', 'success');
-    }
-
-    setAttendanceDialogOpen(false);
-    setSelectedStaff(null);
-    setAttendanceNotes('');
-  };
-
-  // Calendar events
-  const events = attendance.map(a => {
-    const staffMember = staff.find(s => s.id === a.staffId);
-    return staffMember ? {
-      id: a.id,
-      title: `${staffMember.name} - ${a.status === 'present' ? 'Present' : 'Absent'}`,
-      start: new Date(a.date),
-      end: new Date(a.date),
-      resource: {
-        staff: staffMember,
-        status: a.status,
-        notes: a.notes,
+  const confirmDelete = () => {
+    if (!toDelete) return;
+    const member = toDelete;
+    const records = attendance.filter((a) => a.staffId === member.id);
+    const position = staff.findIndex((s) => s.id === member.id);
+    setStaff((prev) => prev.filter((s) => s.id !== member.id));
+    setAttendance((prev) => prev.filter((a) => a.staffId !== member.id));
+    setToDelete(null);
+    notify(`Removed ${member.name}`, {
+      severity: 'info',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          setStaff((prev) => {
+            const next = [...prev];
+            next.splice(Math.min(position, next.length), 0, member);
+            return next;
+          });
+          setAttendance((prev) => [...prev, ...records]);
+        },
       },
-    } : null;
-  }).filter(Boolean);
-
-  const resetSalaryCalculation = () => {
-    setSalaryCalculation({
-      selectedStaffId: '',
-      dailyRate: '',
-      startDate: moment().startOf('month').format('YYYY-MM-DD'),
-      endDate: moment().endOf('month').format('YYYY-MM-DD'),
-      creditDeduction: '',
-      presentDays: 0,
-      grossSalary: 0,
-      finalSalary: 0,
     });
   };
 
-  const calculateSalary = () => {
-    if (!salaryCalculation.selectedStaffId || !salaryCalculation.dailyRate) {
-      notify('Please select staff and enter daily rate', 'error');
-      return;
-    }
+  // ---------- payroll ----------
 
-    const dailyRate = parseFloat(salaryCalculation.dailyRate);
-    const creditDeduction = parseFloat(salaryCalculation.creditDeduction) || 0;
+  const range = periodRange(period, custom);
+  const payroll = useMemo(
+    () =>
+      staff.map((s) => {
+        const days = attendance.filter((a) => a.staffId === s.id && a.status === 'present' && a.date >= range.start && a.date <= range.end).length;
+        const rateText = rateDrafts[s.id] ?? (s.dailyRate ? String(s.dailyRate) : '');
+        const rate = parseFloat(rateText) || 0;
+        const deduction = parseFloat(deductions[s.id] ?? '') || 0;
+        const gross = days * rate;
+        return { staff: s, days, rateText, rate, deduction, gross, net: gross - deduction };
+      }),
+    [attendance, deductions, range.end, range.start, rateDrafts, staff]
+  );
+  const payrollTotal = payroll.reduce((sum, row) => sum + row.net, 0);
 
-    const presentDays = attendance.filter(a => {
-      const recordDate = a.date;
-      const isInRange = recordDate >= salaryCalculation.startDate && recordDate <= salaryCalculation.endDate;
-      const isSelectedStaff = a.staffId === salaryCalculation.selectedStaffId;
-      const isPresent = a.status === 'present';
-      return isInRange && isSelectedStaff && isPresent;
-    }).length;
-
-    const grossSalary = presentDays * dailyRate;
-    const finalSalary = grossSalary - creditDeduction;
-
-    setSalaryCalculation(prev => ({
-      ...prev,
-      presentDays,
-      grossSalary,
-      finalSalary,
-    }));
+  // A rate typed in payroll is remembered on the staff member
+  const commitRate = (staffId: string) => {
+    const text = rateDrafts[staffId];
+    if (text === undefined) return;
+    const rate = parseFloat(text);
+    setStaff((prev) => prev.map((s) => (s.id === staffId ? { ...s, dailyRate: Number.isFinite(rate) && rate > 0 ? rate : undefined } : s)));
+    setRateDrafts(({ [staffId]: _, ...rest }) => rest);
   };
 
-  // 2. Handler to open dialog for a date
-  const handleCalendarDateSelect = (slotInfo: any) => {
-    const date = moment(slotInfo.start).format('YYYY-MM-DD');
-    setCalendarSelectedDate(date);
-    // Prepare draft attendance for all staff for this date
-    const draft: Record<string, { status: 'present' | 'absent', notes: string }> = {};
-    staff.forEach(s => {
-      const rec = attendance.find(a => a.staffId === s.id && a.date === date);
-      draft[s.id] = {
-        status: rec ? rec.status : 'present',
-        notes: rec ? rec.notes || '' : '',
-      };
-    });
-    setCalendarAttendanceDraft(draft);
-    setCalendarAttendanceDialogOpen(true);
+  const exportPayroll = () => {
+    const rows = [
+      `Period,${range.start} to ${range.end}`,
+      'Name,Position,Days present,Daily rate,Gross,Deduction,Net pay',
+      ...payroll.map((r) => [`"${r.staff.name.replace(/"/g, '""')}"`, `"${r.staff.position.replace(/"/g, '""')}"`, r.days, r.rate.toFixed(2), r.gross.toFixed(2), r.deduction.toFixed(2), r.net.toFixed(2)].join(',')),
+      `Total,,,,,,${payrollTotal.toFixed(2)}`,
+    ];
+    saveAs(new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' }), `payroll_${range.start}_to_${range.end}.csv`);
+    notify('Payroll exported', 'success');
   };
 
-  // 3. Handler to save attendance edits
-  const handleSaveCalendarAttendance = () => {
-    if (!calendarSelectedDate) return;
-    let updatedAttendance = [...attendance];
-    staff.forEach(s => {
-      const draft = calendarAttendanceDraft[s.id];
-      const existing = updatedAttendance.find(a => a.staffId === s.id && a.date === calendarSelectedDate);
-      if (existing) {
-        existing.status = draft.status;
-        existing.notes = draft.notes;
-      } else {
-        updatedAttendance.push({
-          id: Date.now().toString() + Math.random(),
-          staffId: s.id,
-          date: calendarSelectedDate,
-          status: draft.status,
-          notes: draft.notes,
-        });
-      }
-    });
-    setAttendance(updatedAttendance);
-    setCalendarAttendanceDialogOpen(false);
-    setCalendarSelectedDate(null);
-    notify('Attendance updated for selected date.', 'success');
+  // ---------- render ----------
+
+  const gridDays = useMemo(() => {
+    const count = new Date(gridMonth.year, gridMonth.month + 1, 0).getDate();
+    return Array.from({ length: count }, (_, i) => isoDate(new Date(gridMonth.year, gridMonth.month, i + 1)));
+  }, [gridMonth]);
+  const gridLabel = new Date(gridMonth.year, gridMonth.month, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+  const stepGrid = (by: number) => {
+    const d = new Date(gridMonth.year, gridMonth.month + by, 1);
+    setGridMonth({ year: d.getFullYear(), month: d.getMonth() });
   };
+
+  const emptyState = (
+    <Box sx={{ textAlign: 'center', py: 8, px: 3 }}>
+      <PeopleIcon sx={{ fontSize: 44, color: 'text.disabled', mb: 1 }} />
+      <Typography fontWeight={600}>No staff yet</Typography>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Add your staff to track attendance and work out pay.
+      </Typography>
+      <Button variant="contained" startIcon={<AddIcon />} onClick={() => openForm()}>
+        Add staff
+      </Button>
+    </Box>
+  );
 
   return (
-    <Box sx={{ p: 3 }}>
-      {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 4 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center' }}>
-          <PeopleIcon sx={{ fontSize: 40, color: 'primary.main', mr: 2 }} />
-          <Box>
-            <Typography variant="h4" fontWeight={800} color="primary.main">
-              Staff Management
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Manage your team and track attendance
-            </Typography>
-          </Box>
+    <Box>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1.5, mb: 2 }}>
+        <Box>
+          <Typography variant="h5">Staff</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Attendance and pay for {staff.length} staff member{staff.length !== 1 ? 's' : ''}.
+          </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setDialogOpen(true)}
-          sx={{ 
-            borderRadius: 3,
-            px: 3,
-            py: 1.5,
-            boxShadow: 3,
-            '&:hover': { boxShadow: 6 }
-          }}
-        >
-          Add Staff Member
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => openForm()}>
+          Add staff
         </Button>
       </Box>
 
-      {/* Statistics Cards */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper sx={{ p: 3, borderRadius: 3, bgcolor: 'banner.main', color: 'white' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Box>
-                <Typography variant="h3" fontWeight={700}>{totalStaff}</Typography>
-                <Typography variant="body2" sx={{ opacity: 0.9 }}>Total Staff</Typography>
-              </Box>
-              <PeopleIcon sx={{ fontSize: 48, opacity: 0.8 }} />
-            </Box>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper sx={{ p: 3, borderRadius: 3, background: '#be185d', color: 'white' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Box>
-                <Typography variant="h3" fontWeight={700}>{presentToday}</Typography>
-                <Typography variant="body2" sx={{ opacity: 0.9 }}>Present Today</Typography>
-              </Box>
-              <PresentIcon sx={{ fontSize: 48, opacity: 0.8 }} />
-            </Box>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper sx={{ p: 3, borderRadius: 3, background: '#0369a1', color: 'white' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Box>
-                <Typography variant="h3" fontWeight={700}>{absentToday}</Typography>
-                <Typography variant="body2" sx={{ opacity: 0.9 }}>Absent Today</Typography>
-              </Box>
-              <AbsentIcon sx={{ fontSize: 48, opacity: 0.8 }} />
-            </Box>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper sx={{ p: 3, borderRadius: 3, background: '#b45309', color: 'white' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Box>
-                <Typography variant="h3" fontWeight={700}>{notRecordedToday}</Typography>
-                <Typography variant="body2" sx={{ opacity: 0.9 }}>Not Recorded</Typography>
-              </Box>
-              <ScheduleIcon sx={{ fontSize: 48, opacity: 0.8 }} />
-            </Box>
-          </Paper>
-        </Grid>
-      </Grid>
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5, mb: 2 }}>
+        <StatTile icon={<PeopleIcon />} label="Staff" value={String(staff.length)} caption="On the team" />
+        <StatTile icon={<PresentIcon />} label="Present today" value={String(todayStats.present)} caption={formatDay(today)} tone="success" />
+        <StatTile icon={<AbsentIcon />} label="Absent today" value={String(todayStats.absent)} caption={formatDay(today)} tone="error" />
+        <StatTile icon={<UnrecordedIcon />} label="Not recorded" value={String(todayStats.unrecorded)} caption={todayStats.unrecorded ? 'Still to mark today' : 'Everyone is marked'} tone="warning" />
+      </Box>
 
-      {/* Tabs */}
-      <Paper sx={{ borderRadius: 3, overflow: 'hidden' }}>
-        <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-          <Tabs value={tabValue} onChange={(e, newValue) => setTabValue(newValue)} sx={{ px: 2 }}>
-            <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <PeopleIcon fontSize="small" />
-                  Staff Directory
-                </Box>
-              } 
-            />
-            <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <TodayIcon fontSize="small" />
-                  Today's Attendance
-                </Box>
-              } 
-            />
-            <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CalendarIcon fontSize="small" />
-                  Calendar
-                </Box>
-              } 
-            />
-            <Tab 
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <SalaryIcon fontSize="small" />
-                  Salary Calculator
-                </Box>
-              } 
-            />
-          </Tabs>
-        </Box>
+      <Card sx={{ minWidth: 0 }}>
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={{ px: 1, borderBottom: 1, borderColor: 'divider' }}>
+          <Tab value="today" label="Today" />
+          <Tab value="directory" label="Directory" />
+          <Tab value="attendance" label="Attendance" />
+          <Tab value="payroll" label="Payroll" />
+        </Tabs>
 
-        {/* Staff Directory Tab */}
-        <TabPanel value={tabValue} index={0}>
-          <Box sx={{ px: 3, py: 2 }}>
-            <Grid container spacing={3}>
-              {staff.length === 0 ? (
-                <Grid item xs={12}>
-                  <Box sx={{ textAlign: 'center', py: 8 }}>
-                    <PersonIcon sx={{ fontSize: 120, color: 'text.secondary', opacity: 0.3, mb: 2 }} />
-                    <Typography variant="h5" color="text.secondary" gutterBottom>
-                      No staff members yet
-                    </Typography>
-                    <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-                      Add your first team member to get started with staff management
-                    </Typography>
-                    <Button
-                      variant="contained"
-                      size="large"
-                      startIcon={<AddIcon />}
-                      onClick={() => setDialogOpen(true)}
-                      sx={{ borderRadius: 3, px: 4, py: 1.5 }}
+        {/* Today: one tap per person */}
+        {tab === 'today' &&
+          (staff.length === 0 ? (
+            emptyState
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, py: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle2">{new Date().toLocaleDateString('en-PH', { weekday: 'long', month: 'long', day: 'numeric' })}</Typography>
+                <Button size="small" startIcon={<AllPresentIcon />} onClick={markAllPresent} disabled={todayStats.unrecorded === 0}>
+                  Mark everyone else present
+                </Button>
+              </Box>
+              {staff.map((s) => {
+                const record = byKey.get(`${s.id}|${today}`);
+                return (
+                  <Box
+                    key={s.id}
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'minmax(0, 1fr) 220px minmax(0, 1fr)' },
+                      gap: 1.5,
+                      alignItems: 'center',
+                      px: 2,
+                      py: 1.25,
+                      borderBottom: 1,
+                      borderColor: 'divider',
+                    }}
+                  >
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+                      <Avatar name={s.name} />
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography fontWeight={600} noWrap>
+                          {s.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap component="p">
+                          {s.position}
+                        </Typography>
+                      </Box>
+                    </Box>
+                    <ToggleButtonGroup
+                      exclusive
+                      size="small"
+                      value={record?.status ?? null}
+                      onChange={(_, value: Status | null) => setStatus(s.id, today, value)}
+                      aria-label={`Attendance for ${s.name}`}
+                      sx={{ '& .MuiToggleButton-root': { textTransform: 'none', fontWeight: 600, px: 1.5 } }}
                     >
-                      Add Staff Member
-                    </Button>
+                      <ToggleButton value="present" color="success">
+                        <PresentIcon sx={{ fontSize: 18, mr: 0.5 }} /> Present
+                      </ToggleButton>
+                      <ToggleButton value="absent" color="error">
+                        <AbsentIcon sx={{ fontSize: 18, mr: 0.5 }} /> Absent
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                    <TextField
+                      size="small"
+                      placeholder={record ? 'Note (optional)' : 'Mark attendance to add a note'}
+                      disabled={!record}
+                      defaultValue={record?.notes ?? ''}
+                      key={`${s.id}-${record ? 'on' : 'off'}`}
+                      onBlur={(e) => record && e.target.value !== (record.notes ?? '') && setNote(s.id, today, e.target.value)}
+                      sx={{ gridColumn: { xs: '1 / -1', md: 'auto' } }}
+                    />
                   </Box>
-                </Grid>
-              ) : (
-                staff.map(staffMember => {
-                  const todayAttendance = getTodayAttendance(staffMember.id);
-                  return (
-                    <Grid item xs={12} sm={6} lg={4} key={staffMember.id}>
-                      <Card sx={{
-                        borderRadius: 3,
-                        boxShadow: 2,
-                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                        cursor: 'pointer',
-                        height: '100%',
-                        '&:hover': {
-                          transform: 'translateY(-4px)',
-                          boxShadow: 6,
-                        },
-                        border: '1px solid',
-                        borderColor: 'grey.200',
-                      }} onClick={() => handleStaffCardClick(staffMember)}>
-                        <CardContent sx={{ p: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                            <Avatar 
-                              sx={{ 
-                                width: 50, 
-                                height: 50, 
-                                mr: 2, 
-                                bgcolor: 'primary.main',
-                                fontSize: 18,
-                                fontWeight: 700
-                              }}
-                            >
-                              {staffMember.name.charAt(0)}
-                            </Avatar>
-                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                              <Typography variant="h6" fontWeight={700} gutterBottom noWrap>
-                                {staffMember.name}
-                              </Typography>
-                              <Chip 
-                                label={staffMember.position} 
-                                size="small" 
-                                sx={{ 
-                                  bgcolor: 'primary.50', 
-                                  color: 'primary.main',
-                                  fontWeight: 600,
-                                  maxWidth: '100%'
-                                }} 
-                              />
-                            </Box>
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, ml: 1 }}>
-                              <IconButton
-                                size="small"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEditDialog(staffMember);
-                                }}
-                                sx={{ bgcolor: 'grey.50', width: 32, height: 32 }}
-                              >
-                                <EditIcon fontSize="small" />
-                              </IconButton>
-                              <IconButton
-                                size="small"
-                                color="error"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDeleteStaff(staffMember.id);
-                                }}
-                                sx={{ bgcolor: 'error.50', width: 32, height: 32 }}
-                              >
-                                <DeleteIcon fontSize="small" />
-                              </IconButton>
-                            </Box>
-                          </Box>
-                          
-                          <Divider sx={{ my: 2 }} />
-                          
-                          <Stack spacing={1}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <EmailIcon fontSize="small" color="action" />
-                              <Typography variant="body2" color="text.secondary" noWrap sx={{ flex: 1 }}>
-                                {staffMember.email || 'No email provided'}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <PhoneIcon fontSize="small" color="action" />
-                              <Typography variant="body2" color="text.secondary" noWrap sx={{ flex: 1 }}>
-                                {staffMember.phone || 'No phone provided'}
-                              </Typography>
-                            </Box>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <DateRangeIcon fontSize="small" color="action" />
-                              <Typography variant="body2" color="text.secondary" noWrap sx={{ flex: 1 }}>
-                                Started: {moment(staffMember.startDate).format('MMM DD, YYYY')}
-                              </Typography>
-                            </Box>
-                          </Stack>
+                );
+              })}
+            </>
+          ))}
 
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
-                            <Typography variant="body2" fontWeight={600} color="text.secondary">
-                              Today's Status:
-                            </Typography>
-                            {todayAttendance ? (
-                              <Chip
-                                icon={todayAttendance.status === 'present' ? <PresentIcon /> : <AbsentIcon />}
-                                label={todayAttendance.status === 'present' ? 'Present' : 'Absent'}
-                                color={todayAttendance.status === 'present' ? 'success' : 'error'}
-                                size="small"
-                                sx={{ fontWeight: 600 }}
-                              />
-                            ) : (
-                              <Chip 
-                                label="Not Recorded" 
-                                color="warning" 
-                                size="small"
-                                sx={{ fontWeight: 600 }}
-                              />
-                            )}
-                          </Box>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  );
-                })
-              )}
-            </Grid>
-          </Box>
-        </TabPanel>
-
-        {/* Today's Attendance Tab */}
-        <TabPanel value={tabValue} index={1}>
-          <Box sx={{ px: 3, py: 2 }}>
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" gutterBottom fontWeight={700}>
-                Today's Attendance - {moment().format('MMMM DD, YYYY')}
-              </Typography>
-            </Box>
-            
-            <Grid container spacing={3}>
-              {staff.length === 0 ? (
-                <Grid item xs={12}>
-                  <Box sx={{ textAlign: 'center', py: 6 }}>
-                    <TodayIcon sx={{ fontSize: 80, color: 'text.secondary', opacity: 0.3, mb: 2 }} />
-                    <Typography variant="h6" color="text.secondary" gutterBottom>
-                      No staff members to track
+        {/* Directory */}
+        {tab === 'directory' &&
+          (staff.length === 0
+            ? emptyState
+            : staff.map((s) => (
+                <Box
+                  key={s.id}
+                  sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: 'minmax(0, 1fr) auto', md: 'minmax(0, 1.2fr) minmax(0, 1fr) 140px 120px auto' },
+                    gap: 1.5,
+                    alignItems: 'center',
+                    px: 2,
+                    py: 1.25,
+                    borderBottom: 1,
+                    borderColor: 'divider',
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+                    <Avatar name={s.name} />
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography fontWeight={600} noWrap>
+                        {s.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" noWrap component="p">
+                        {s.position}
+                      </Typography>
+                    </Box>
+                  </Box>
+                  <Box sx={{ minWidth: 0, display: { xs: 'none', md: 'block' } }}>
+                    <Typography variant="body2" noWrap sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <PhoneIcon sx={{ fontSize: 16, color: 'text.secondary' }} /> {s.phone || '—'}
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Add staff members to start tracking daily attendance
+                    <Typography variant="body2" noWrap sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                      <EmailIcon sx={{ fontSize: 16, color: 'text.secondary' }} /> {s.email || '—'}
                     </Typography>
                   </Box>
-                </Grid>
-              ) : (
-                staff.map(staffMember => {
-                  const todayAttendance = getTodayAttendance(staffMember.id);
-                  return (
-                    <Grid item xs={12} sm={6} md={4} key={staffMember.id}>
-                      <Card 
-                        sx={{ 
-                          borderRadius: 3,
-                          cursor: 'pointer',
-                          border: 2,
-                          borderColor: todayAttendance 
-                            ? (todayAttendance.status === 'present' ? 'success.main' : 'error.main')
-                            : 'warning.main',
-                          transition: 'all 0.2s',
-                          '&:hover': { 
-                            boxShadow: 4,
-                            transform: 'translateY(-2px)'
-                          }
-                        }}
-                        onClick={() => handleStaffCardClick(staffMember)}
-                      >
-                        <CardContent sx={{ p: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                            <Avatar sx={{ bgcolor: 'primary.main', width: 48, height: 48 }}>
-                              {staffMember.name.charAt(0)}
-                            </Avatar>
-                            <Box sx={{ flexGrow: 1, minWidth: 0 }}>
-                              <Typography variant="subtitle1" fontWeight={600} noWrap>
-                                {staffMember.name}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary" noWrap>
-                                {staffMember.position}
-                              </Typography>
-                            </Box>
-                            {todayAttendance ? (
-                              <Chip
-                                icon={todayAttendance.status === 'present' ? <PresentIcon /> : <AbsentIcon />}
-                                label={todayAttendance.status}
-                                color={todayAttendance.status === 'present' ? 'success' : 'error'}
-                                variant="filled"
-                                sx={{ fontWeight: 600 }}
-                              />
-                            ) : (
-                              <Chip 
-                                label="Record" 
-                                color="warning" 
-                                variant="outlined"
-                                sx={{ fontWeight: 600 }}
-                              />
-                            )}
-                          </Box>
-                          {todayAttendance?.notes && (
-                            <Typography variant="body2" color="text.secondary" sx={{ mt: 2, fontStyle: 'italic' }}>
-                              Note: {todayAttendance.notes}
-                            </Typography>
-                          )}
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  );
-                })
-              )}
-            </Grid>
-          </Box>
-        </TabPanel>
+                  <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+                    <Typography variant="body2">{tenure(s)}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      since {fromIso(startDateIso(s)).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+                    <Typography variant="body2" fontWeight={600}>
+                      {presentThisMonth(s.id)} days
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      present this month
+                    </Typography>
+                  </Box>
+                  <Box sx={{ display: 'flex' }}>
+                    <Tooltip title="Edit">
+                      <IconButton aria-label={`Edit ${s.name}`} onClick={() => openForm(s)}>
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Remove">
+                      <IconButton aria-label={`Remove ${s.name}`} onClick={() => setToDelete(s)}>
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                </Box>
+              )))}
 
-        {/* Calendar Tab */}
-        <TabPanel value={tabValue} index={2}>
-          <Box sx={{ px: 3, py: 2 }}>
-            <Box sx={{ mb: 3 }}>
-              <Typography variant="h6" gutterBottom fontWeight={700}>
-                Staff Attendance Calendar
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                View attendance history across all staff members
-              </Typography>
-            </Box>
-            <Box sx={{ 
-              height: 600, 
-              border: '1px solid', 
-              borderColor: 'grey.200', 
-              borderRadius: 2,
-              p: 2,
-              bgcolor: 'background.paper'
-            }}>
-              <Calendar
-                localizer={localizer}
-                events={events}
-                startAccessor="start"
-                endAccessor="end"
-                eventPropGetter={(event: any) => ({
-                  style: {
-                    backgroundColor: event.resource?.status === 'present' ? '#4caf50' : '#f44336',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                  },
-                })}
-                views={['month', 'week', 'day']}
-                defaultView="month"
-                popup
-                style={{ height: '100%' }}
-                selectable
-                onSelectSlot={handleCalendarDateSelect}
-                onSelectEvent={handleCalendarDateSelect}
+        {/* Attendance month grid */}
+        {tab === 'attendance' &&
+          (staff.length === 0 ? (
+            emptyState
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+                <IconButton aria-label="Previous month" onClick={() => stepGrid(-1)}>
+                  <PrevIcon />
+                </IconButton>
+                <Typography fontWeight={700} sx={{ minWidth: 140, textAlign: 'center' }}>
+                  {gridLabel}
+                </Typography>
+                <IconButton aria-label="Next month" onClick={() => stepGrid(1)}>
+                  <NextIcon />
+                </IconButton>
+                <Typography variant="caption" color="text.secondary" sx={{ ml: { sm: 'auto' } }}>
+                  Click a day to cycle: present → absent → not recorded
+                </Typography>
+              </Box>
+              <Box sx={{ overflowX: 'auto' }}>
+                <Box
+                  sx={{ display: 'grid', gridTemplateColumns: `168px repeat(${gridDays.length}, 28px) 52px`, minWidth: 'max-content', fontSize: '0.75rem' }}
+                >
+                  <Box sx={{ position: 'sticky', left: 0, zIndex: 1, bgcolor: 'background.paper', px: 2, py: 1, fontWeight: 600, color: 'text.secondary' }}>Staff</Box>
+                  {gridDays.map((d) => {
+                    const date = fromIso(d);
+                    const weekend = date.getDay() === 0 || date.getDay() === 6;
+                    return (
+                      <Box key={d} sx={{ textAlign: 'center', py: 0.5, color: d === today ? 'primary.main' : weekend ? 'text.secondary' : 'text.primary', fontWeight: d === today ? 800 : 600 }}>
+                        <div>{date.getDate()}</div>
+                        <div style={{ fontWeight: 400, opacity: 0.7 }}>{date.toLocaleDateString('en-PH', { weekday: 'narrow' })}</div>
+                      </Box>
+                    );
+                  })}
+                  <Box sx={{ textAlign: 'center', py: 1, fontWeight: 600, color: 'text.secondary' }} title="Days present">Days</Box>
+                  {staff.map((s) => {
+                    const present = gridDays.filter((d) => statusOn(s.id, d) === 'present').length;
+                    return (
+                      <React.Fragment key={s.id}>
+                        <Box sx={{ position: 'sticky', left: 0, zIndex: 1, bgcolor: 'background.paper', px: 2, py: 0.5, display: 'flex', alignItems: 'center', gap: 1, borderTop: 1, borderColor: 'divider', minWidth: 0 }}>
+                          <Avatar name={s.name} size={24} />
+                          <Typography variant="body2" fontWeight={600} noWrap>
+                            {s.name}
+                          </Typography>
+                        </Box>
+                        {gridDays.map((d) => {
+                          const st = statusOn(s.id, d);
+                          const future = d > today;
+                          return (
+                            <Box key={d} sx={{ borderTop: 1, borderColor: 'divider', display: 'grid', placeItems: 'center', py: 0.5 }}>
+                              <Box
+                                component="button"
+                                type="button"
+                                disabled={future}
+                                aria-label={`${s.name}, ${formatDay(d)}: ${st ?? 'not recorded'}`}
+                                title={`${formatDay(d)}: ${st ?? 'not recorded'}${byKey.get(`${s.id}|${d}`)?.notes ? ` · ${byKey.get(`${s.id}|${d}`)!.notes}` : ''}`}
+                                onClick={() => cycleCell(s.id, d)}
+                                sx={{
+                                  width: 24,
+                                  height: 24,
+                                  borderRadius: '6px',
+                                  border: 1,
+                                  borderColor: st ? 'transparent' : 'divider',
+                                  cursor: future ? 'default' : 'pointer',
+                                  font: 'inherit',
+                                  fontWeight: 800,
+                                  fontSize: '0.6875rem',
+                                  color: st ? '#fff' : 'text.disabled',
+                                  bgcolor: st === 'present' ? 'success.main' : st === 'absent' ? 'error.main' : 'transparent',
+                                  opacity: future ? 0.35 : 1,
+                                  '&:hover:not(:disabled)': { outline: 2, outlineStyle: 'solid', outlineColor: 'primary.main' },
+                                }}
+                              >
+                                {st === 'present' ? 'P' : st === 'absent' ? 'A' : ''}
+                              </Box>
+                            </Box>
+                          );
+                        })}
+                        <Box sx={{ borderTop: 1, borderColor: 'divider', display: 'grid', placeItems: 'center', fontWeight: 700, fontSize: '0.875rem' }}>{present}</Box>
+                      </React.Fragment>
+                    );
+                  })}
+                </Box>
+              </Box>
+            </>
+          ))}
+
+        {/* Payroll for everyone */}
+        {tab === 'payroll' &&
+          (staff.length === 0 ? (
+            emptyState
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
+                <TextField select size="small" label="Pay period" value={period} onChange={(e) => setPeriod(e.target.value as PayPeriod)} sx={{ minWidth: 190 }}>
+                  <MenuItem value="this-month">This month</MenuItem>
+                  <MenuItem value="last-month">Last month</MenuItem>
+                  <MenuItem value="first-half">1st–15th (this month)</MenuItem>
+                  <MenuItem value="second-half">16th–end (this month)</MenuItem>
+                  <MenuItem value="custom">Custom dates</MenuItem>
+                </TextField>
+                {period === 'custom' ? (
+                  <>
+                    <TextField size="small" type="date" label="From" value={custom.start} onChange={(e) => setCustom({ ...custom, start: e.target.value })} InputLabelProps={{ shrink: true }} />
+                    <TextField size="small" type="date" label="To" value={custom.end} onChange={(e) => setCustom({ ...custom, end: e.target.value })} InputLabelProps={{ shrink: true }} />
+                  </>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    {fromIso(range.start).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })} – {fromIso(range.end).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </Typography>
+                )}
+                <Button size="small" startIcon={<ExportIcon />} onClick={exportPayroll} sx={{ ml: { sm: 'auto' } }}>
+                  Export CSV
+                </Button>
+              </Box>
+              <Box sx={{ overflowX: 'auto' }}>
+                <Box sx={{ minWidth: 640 }}>
+                  <Box
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) 70px 130px 110px 130px 120px',
+                      gap: 1.5,
+                      px: 2,
+                      py: 1,
+                      borderBottom: 1,
+                      borderColor: 'divider',
+                      bgcolor: 'background.default',
+                      '& span': { typography: 'caption', fontWeight: 600, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: '0.04em' },
+                    }}
+                  >
+                    <span>Staff</span>
+                    <span style={{ textAlign: 'right' }}>Days</span>
+                    <span>Daily rate</span>
+                    <span style={{ textAlign: 'right' }}>Gross</span>
+                    <span>Deduction</span>
+                    <span style={{ textAlign: 'right' }}>Net pay</span>
+                  </Box>
+                  {payroll.map((row) => (
+                    <Box
+                      key={row.staff.id}
+                      sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 70px 130px 110px 130px 120px', gap: 1.5, alignItems: 'center', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                        <Avatar name={row.staff.name} size={28} />
+                        <Typography variant="body2" fontWeight={600} noWrap>
+                          {row.staff.name}
+                        </Typography>
+                      </Box>
+                      <Typography variant="body2" sx={{ textAlign: 'right', fontWeight: 600 }}>
+                        {row.days}
+                      </Typography>
+                      <TextField
+                        size="small"
+                        type="number"
+                        value={row.rateText}
+                        placeholder="0"
+                        onChange={(e) => setRateDrafts({ ...rateDrafts, [row.staff.id]: e.target.value })}
+                        onBlur={() => commitRate(row.staff.id)}
+                        inputProps={{ min: 0, step: 1, 'aria-label': `Daily rate for ${row.staff.name}` }}
+                        InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+                      />
+                      <Typography variant="body2" sx={{ textAlign: 'right' }}>
+                        {formatPeso(row.gross)}
+                      </Typography>
+                      <TextField
+                        size="small"
+                        type="number"
+                        value={deductions[row.staff.id] ?? ''}
+                        placeholder="0"
+                        onChange={(e) => setDeductions({ ...deductions, [row.staff.id]: e.target.value })}
+                        inputProps={{ min: 0, step: 1, 'aria-label': `Deduction for ${row.staff.name}` }}
+                        InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+                      />
+                      <Typography variant="body2" fontWeight={700} sx={{ textAlign: 'right', color: row.net < 0 ? 'error.main' : 'text.primary' }}>
+                        {formatPeso(row.net)}
+                      </Typography>
+                    </Box>
+                  ))}
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', px: 2, py: 1.5 }}>
+                    <Typography variant="caption" color="text.secondary">
+                      Days are “present” days in the period. Daily rates are remembered; deductions (e.g. credit) are per pay run.
+                    </Typography>
+                    <Typography fontWeight={700}>Total {formatPeso(payrollTotal)}</Typography>
+                  </Box>
+                </Box>
+              </Box>
+            </>
+          ))}
+      </Card>
+
+      {/* Add / edit staff */}
+      <Dialog open={formOpen} onClose={() => setFormOpen(false)} maxWidth="xs" fullWidth>
+        <Box component="form" noValidate onSubmit={saveForm}>
+          <DialogTitle>{editing ? `Edit ${editing.name}` : 'Add staff'}</DialogTitle>
+          <DialogContent sx={{ display: 'grid', gap: 2, pt: '8px !important' }}>
+            <TextField
+              autoFocus
+              label="Full name"
+              value={form.name}
+              onChange={(e) => {
+                setForm({ ...form, name: e.target.value });
+                setFormErrors({ ...formErrors, name: undefined });
+              }}
+              error={Boolean(formErrors.name)}
+              helperText={formErrors.name}
+            />
+            <TextField
+              label="Position"
+              value={form.position}
+              onChange={(e) => {
+                setForm({ ...form, position: e.target.value });
+                setFormErrors({ ...formErrors, position: undefined });
+              }}
+              error={Boolean(formErrors.position)}
+              helperText={formErrors.position}
+            />
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+              <TextField label="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} inputProps={{ inputMode: 'tel' }} />
+              <TextField label="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} inputProps={{ inputMode: 'email' }} />
+              <TextField label="Start date" type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} InputLabelProps={{ shrink: true }} />
+              <TextField
+                label="Daily rate"
+                type="number"
+                value={form.dailyRate}
+                onChange={(e) => setForm({ ...form, dailyRate: e.target.value })}
+                inputProps={{ min: 0, step: 1 }}
+                InputProps={{ startAdornment: <InputAdornment position="start">₱</InputAdornment> }}
+                helperText="Used in Payroll"
               />
             </Box>
-          </Box>
-        </TabPanel>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button color="inherit" onClick={() => setFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained">
+              {editing ? 'Save' : 'Add staff'}
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
 
-        {/* Salary Calculator Tab */}
-        <TabPanel value={tabValue} index={3}>
-          <Box sx={{ px: 3, py: 2 }}>
-            <Grid container spacing={4}>
-              <Grid item xs={12} md={6}>
-                <Box sx={{ pr: { md: 3 } }}>
-                  <Typography variant="h6" gutterBottom sx={{ mb: 3, fontWeight: 700 }}>
-                    Calculate Salary
-                  </Typography>
-                  <Stack spacing={3}>
-                    <FormControl fullWidth>
-                      <InputLabel>Select Staff Member</InputLabel>
-                      <Select
-                        value={salaryCalculation.selectedStaffId}
-                        label="Select Staff Member"
-                        onChange={e => handleSalaryInputChange('selectedStaffId', e.target.value)}
-                      >
-                        {staff.map(s => (
-                          <MenuItem key={s.id} value={s.id}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Avatar sx={{ width: 24, height: 24, fontSize: 12 }}>
-                                {s.name.charAt(0)}
-                              </Avatar>
-                              {s.name} - {s.position}
-                            </Box>
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                    
-                    <TextField
-                      fullWidth
-                      label="Daily Rate (₱)"
-                      type="number"
-                      value={salaryCalculation.dailyRate}
-                      onChange={e => handleSalaryInputChange('dailyRate', e.target.value)}
-                      InputProps={{
-                        startAdornment: <SalaryIcon color="action" sx={{ mr: 1 }} />,
-                      }}
-                    />
-                    
-                    <Box sx={{ display: 'flex', gap: 2 }}>
-                      <TextField
-                        label="Start Date"
-                        type="date"
-                        value={salaryCalculation.startDate}
-                        onChange={e => handleSalaryInputChange('startDate', e.target.value)}
-                        InputLabelProps={{ shrink: true }}
-                        sx={{ flex: 1 }}
-                      />
-                      <TextField
-                        label="End Date"
-                        type="date"
-                        value={salaryCalculation.endDate}
-                        onChange={e => handleSalaryInputChange('endDate', e.target.value)}
-                        InputLabelProps={{ shrink: true }}
-                        sx={{ flex: 1 }}
-                      />
-                    </Box>
-                    
-                    <TextField
-                      fullWidth
-                      label="Credit Deduction (₱)"
-                      type="number"
-                      value={salaryCalculation.creditDeduction}
-                      onChange={e => handleSalaryInputChange('creditDeduction', e.target.value)}
-                    />
-                    
-                    <Box sx={{ display: 'flex', gap: 2, pt: 2 }}>
-                      <Button
-                        variant="outlined"
-                        onClick={resetSalaryCalculation}
-                        sx={{ 
-                          borderRadius: 2, 
-                          minWidth: 120,
-                          py: 1.5
-                        }}
-                      >
-                        Reset
-                      </Button>
-                      <Button
-                        variant="contained"
-                        onClick={calculateSalary}
-                        sx={{ 
-                          borderRadius: 2, 
-                          flexGrow: 1,
-                          py: 1.5,
-                          fontWeight: 600
-                        }}
-                      >
-                        Calculate Salary
-                      </Button>
-                    </Box>
-                  </Stack>
-                </Box>
-              </Grid>
-              
-              <Grid item xs={12} md={6}>
-                <Box sx={{ pl: { md: 3 } }}>
-                  <Typography variant="h6" gutterBottom sx={{ mb: 3, fontWeight: 700 }}>
-                    Salary Summary
-                  </Typography>
-                  <Stack spacing={3}>
-                    <Paper sx={{ 
-                      p: 3, 
-                      borderRadius: 3, 
-                      bgcolor: 'primary.50',
-                      border: '1px solid',
-                      borderColor: 'primary.100'
-                    }}>
-                      <Typography variant="h3" fontWeight={700} color="primary.main" sx={{ mb: 1 }}>
-                        {salaryCalculation.presentDays}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" fontWeight={500}>
-                        Present Days
-                      </Typography>
-                    </Paper>
-                    
-                    <Paper sx={{ 
-                      p: 3, 
-                      borderRadius: 3, 
-                      bgcolor: 'success.50',
-                      border: '1px solid',
-                      borderColor: 'success.100'
-                    }}>
-                      <Typography variant="h3" fontWeight={700} color="success.main" sx={{ mb: 1 }}>
-                        ₱{salaryCalculation.grossSalary.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" fontWeight={500}>
-                        Gross Salary
-                      </Typography>
-                    </Paper>
-                    
-                    <Paper sx={{ 
-                      p: 3, 
-                      borderRadius: 3, 
-                      bgcolor: 'warning.50',
-                      border: '1px solid',
-                      borderColor: 'warning.100'
-                    }}>
-                      <Typography variant="h3" fontWeight={700} color="warning.main" sx={{ mb: 1 }}>
-                        ₱{salaryCalculation.finalSalary.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" fontWeight={500}>
-                        Final Salary (After Deductions)
-                      </Typography>
-                    </Paper>
-                  </Stack>
-                </Box>
-              </Grid>
-            </Grid>
-          </Box>
-        </TabPanel>
-      </Paper>
-
-      {/* Add/Edit Staff Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ pb: 1 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <PersonIcon color="primary" />
-            {editingStaff ? 'Edit Staff Member' : 'Add New Staff Member'}
-          </Box>
-        </DialogTitle>
+      {/* Remove staff */}
+      <Dialog open={toDelete !== null} onClose={() => setToDelete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Remove {toDelete?.name}?</DialogTitle>
         <DialogContent>
-          <Stack spacing={3} sx={{ pt: 2 }}>
-            <TextField
-              fullWidth
-              label="Full Name *"
-              value={formData.name}
-              onChange={e => setFormData({ ...formData, name: e.target.value })}
-              InputProps={{
-                startAdornment: <PersonIcon color="action" sx={{ mr: 1 }} />,
-              }}
-            />
-            <TextField
-              fullWidth
-              label="Position *"
-              value={formData.position}
-              onChange={e => setFormData({ ...formData, position: e.target.value })}
-              InputProps={{
-                startAdornment: <WorkIcon color="action" sx={{ mr: 1 }} />,
-              }}
-            />
-            <TextField
-              fullWidth
-              label="Email Address"
-              type="email"
-              value={formData.email}
-              onChange={e => setFormData({ ...formData, email: e.target.value })}
-              InputProps={{
-                startAdornment: <EmailIcon color="action" sx={{ mr: 1 }} />,
-              }}
-            />
-            <TextField
-              fullWidth
-              label="Phone Number"
-              value={formData.phone}
-              onChange={e => setFormData({ ...formData, phone: e.target.value })}
-              InputProps={{
-                startAdornment: <PhoneIcon color="action" sx={{ mr: 1 }} />,
-              }}
-            />
-            <TextField
-              fullWidth
-              label="Start Date"
-              type="date"
-              value={moment(formData.startDate).format('YYYY-MM-DD')}
-              onChange={e => setFormData({ ...formData, startDate: new Date(e.target.value) })}
-              InputLabelProps={{ shrink: true }}
-              InputProps={{
-                startAdornment: <DateRangeIcon color="action" sx={{ mr: 1 }} />,
-              }}
-            />
-          </Stack>
+          <Typography color="text.secondary">
+            Their {toDelete ? attendance.filter((a) => a.staffId === toDelete.id).length : 0} attendance record(s) go with them. You can undo this right after.
+          </Typography>
         </DialogContent>
-        <DialogActions sx={{ p: 3, pt: 1 }}>
-          <Button 
-            onClick={() => { setDialogOpen(false); setEditingStaff(null); resetForm(); }}
-            sx={{ borderRadius: 2 }}
-          >
+        <DialogActions sx={{ px: 3, pb: 2.5 }}>
+          <Button color="inherit" onClick={() => setToDelete(null)}>
             Cancel
           </Button>
-          <Button 
-            variant="contained" 
-            onClick={editingStaff ? handleUpdateStaff : handleAddStaff}
-            sx={{ borderRadius: 2, px: 3 }}
-          >
-            {editingStaff ? 'Update Staff' : 'Add Staff'}
+          <Button variant="contained" color="error" onClick={confirmDelete}>
+            Remove
           </Button>
         </DialogActions>
       </Dialog>
-
-      {/* Attendance Dialog */}
-      <Dialog open={attendanceDialogOpen} onClose={() => setAttendanceDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <TodayIcon color="primary" />
-            Record Attendance - {selectedStaff?.name}
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={3} sx={{ pt: 2 }}>
-            <FormControl fullWidth>
-              <InputLabel>Attendance Status</InputLabel>
-              <Select
-                value={attendanceStatus}
-                onChange={e => setAttendanceStatus(e.target.value as 'present' | 'absent')}
-                label="Attendance Status"
-              >
-                <MenuItem value="present">
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <PresentIcon color="success" fontSize="small" />
-                    Present
-                  </Box>
-                </MenuItem>
-                <MenuItem value="absent">
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <AbsentIcon color="error" fontSize="small" />
-                    Absent
-                  </Box>
-                </MenuItem>
-              </Select>
-            </FormControl>
-            <TextField
-              fullWidth
-              label="Notes (Optional)"
-              multiline
-              rows={3}
-              value={attendanceNotes}
-              onChange={e => setAttendanceNotes(e.target.value)}
-              placeholder="Add any additional notes about attendance..."
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ p: 3, pt: 1 }}>
-          <Button 
-            onClick={() => { setAttendanceDialogOpen(false); setSelectedStaff(null); setAttendanceNotes(''); }}
-            sx={{ borderRadius: 2 }}
-          >
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            onClick={handleRecordAttendance}
-            sx={{ borderRadius: 2, px: 3 }}
-          >
-            Record Attendance
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Calendar Attendance Edit Dialog */}
-      <Dialog open={calendarAttendanceDialogOpen} onClose={() => setCalendarAttendanceDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <CalendarIcon color="primary" />
-            Edit Attendance - {calendarSelectedDate && moment(calendarSelectedDate).format('MMMM DD, YYYY')}
-          </Box>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 2 }}>
-            {staff.map(s => (
-              <Paper key={s.id} sx={{ p: 2, borderRadius: 2, mb: 1, display: 'flex', alignItems: 'center', gap: 2 }}>
-                <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40 }}>{s.name.charAt(0)}</Avatar>
-                <Box sx={{ flex: 1 }}>
-                  <Typography fontWeight={700}>{s.name}</Typography>
-                  <Typography variant="body2" color="text.secondary">{s.position}</Typography>
-                </Box>
-                <FormControl size="small" sx={{ minWidth: 120 }}>
-                  <Select
-                    value={calendarAttendanceDraft[s.id]?.status || 'present'}
-                    onChange={e => setCalendarAttendanceDraft(draft => ({ ...draft, [s.id]: { ...draft[s.id], status: e.target.value as 'present' | 'absent' } }))}
-                  >
-                    <MenuItem value="present">Present</MenuItem>
-                    <MenuItem value="absent">Absent</MenuItem>
-                  </Select>
-                </FormControl>
-                <TextField
-                  size="small"
-                  label="Notes"
-                  value={calendarAttendanceDraft[s.id]?.notes || ''}
-                  onChange={e => setCalendarAttendanceDraft(draft => ({ ...draft, [s.id]: { ...draft[s.id], notes: e.target.value } }))}
-                  sx={{ minWidth: 120 }}
-                />
-              </Paper>
-            ))}
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCalendarAttendanceDialogOpen(false)} sx={{ borderRadius: 2 }}>Cancel</Button>
-          <Button variant="contained" onClick={handleSaveCalendarAttendance} sx={{ borderRadius: 2, px: 3 }}>Save</Button>
-        </DialogActions>
-      </Dialog>
-
     </Box>
   );
 };
 
-export default Staff; 
+export default Staff;

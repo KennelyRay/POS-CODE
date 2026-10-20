@@ -1,199 +1,267 @@
-import React, { useState, useContext, useRef } from 'react';
+import React, { useContext, useMemo, useRef, useState } from 'react';
 import {
   Box,
-  Grid,
-  TextField,
   Button,
   Card,
-  CardContent,
-  Typography,
-  IconButton,
-  Divider,
-  List,
-  ListItem,
-  ListItemText,
   Chip,
   Dialog,
-  DialogContent,
   DialogActions,
-  Paper,
-  Avatar,
-  Stack,
+  DialogContent,
+  DialogTitle,
+  IconButton,
   InputAdornment,
-  FormControl,
-  InputLabel,
-  Select,
   MenuItem,
-  Switch,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
+  TextField,
   Tooltip,
-  ListItemSecondaryAction,
+  Typography,
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import {
-  Settings as SettingsIcon,
-  Store as StoreIcon,
-  Palette as ThemeIcon,
-  DarkMode as DarkModeIcon,
-  LightMode as LightModeIcon,
-  Notifications as NotificationIcon,
-  Security as SecurityIcon,
-  Backup as BackupIcon,
-  ExpandMore as ExpandMoreIcon,
-  Save as SaveIcon,
-  Upload as UploadIcon,
-  DeleteForever as DeleteIcon,
-  Business as BusinessIcon,
-  LocationOn as LocationIcon,
-  Phone as PhoneIcon,
-  Email as EmailIcon,
-  Assessment as ReportIcon,
-  Receipt as ReceiptIcon,
-  Category as CategoryIcon,
   Add as AddIcon,
-  Edit as EditIcon,
-  Delete as DeleteForeverIcon,
-  Info as InfoIcon,
-  Check as CheckIcon,
-  Warning as WarningIcon,
-  FileDownload as ExportIcon,
-  Assessment as AssessmentIcon,
+  BackupOutlined as BackupIcon,
+  CategoryOutlined as CategoryIcon,
+  CheckCircleRounded as CheckIcon,
+  DarkModeOutlined as DarkIcon,
+  DeleteOutline as DeleteIcon,
+  EditOutlined as EditIcon,
+  FileDownloadOutlined as ExportIcon,
+  FileUploadOutlined as ImportIcon,
+  Inventory2Outlined as InventoryIcon,
+  LightModeOutlined as LightIcon,
+  LockOutlined as LockIcon,
+  PaletteOutlined as AppearanceIcon,
   Print as PrintIcon,
   Refresh as RefreshIcon,
-  Close as CloseIcon,
-  // Category icons for selection
-  LocalBar as LiquorIcon,
-  EmojiFoodBeverage as CoffeeIcon,
-  SmokingRooms as CigarettesIcon,
-  Inventory as WholesaleIcon,
-  Fastfood as JunkFoodIcon,
-  Restaurant as CondimentsIcon,
-  Kitchen as IngredientsIcon,
-  Widgets as CanGoodsIcon,
-  CleaningServices as DetergentIcon,
-  DinnerDining as NoodlesIcon,
-  KitchenOutlined as KitchenThingsIcon,
-  LocalLaundryService as LaundryIcon,
-  Face as CosmeticsIcon,
-  Cookie as CookingBakingIcon,
-  LocalCafe as DrinksIcon,
-  Agriculture as CerealsIcon,
-  ColorLens as DressingsIcon,
-  Opacity as ButterIcon,
-  Spa as FabricConditionerIcon,
-  Cake as CandiesIcon,
-  Favorite as ChocolateIcon,
-  AcUnit as FrozenIcon,
-  Icecream as IceCreamIcon,
-  Soap as ToiletriesIcon,
-  LocalDrink as MilkIcon,
-  Store as BreadIcon,
-  ShoppingBasket as BasketIcon,
-  LocalGroceryStore as GroceryIcon,
-  LocalPizza as PizzaIcon,
-  Egg as EggIcon,
-  FoodBank as LunchIcon,
-  Liquor as AlcoholIcon,
-  LocalFlorist as FloristIcon,
-  LocalPharmacy as PharmacyIcon,
-  Home as HomeIcon,
-  BathroomOutlined as BathroomIcon,
-  LocalMall as ShoppingIcon,
-  FoodBank as FoodBankIcon,
-  RiceBowl as RiceIcon,
-  Yard as YardIcon,
+  StorefrontOutlined as StoreIcon,
+  TableChartOutlined as ReportIcon,
+  Visibility as VisibilityIcon,
+  VisibilityOff as VisibilityOffIcon,
+  WarningAmberRounded as WarningIcon,
 } from '@mui/icons-material';
-import { ThemeContext, StoreSettingsContext, SalesContext, ProductsContext } from '../App';
+import { ProductsContext, SalesContext, StoreSettingsContext, ThemeContext } from '../App';
 import { saveAs } from 'file-saver';
 import ExcelJS from 'exceljs';
 import { usePrinter } from '../contexts/PrinterContext';
-
 import { useNotify } from '../contexts/NotificationContext';
+import { CATEGORY_ICONS, iconByName } from '../utils/categoryIcons';
+import { BACKUP_ITEMS, buildBackup, describeValue, ParsedBackup, parseBackup } from '../utils/backup';
+import {
+  DEFAULT_LOW_STOCK,
+  getLastBackupAt,
+  getLoginPassword,
+  getLoginUsername,
+  getLowStockThreshold,
+  hasCustomLogin,
+  markBackedUp,
+  setLogin,
+  setLowStockThreshold,
+} from '../utils/preferences';
+
+type SectionId = 'store' | 'categories' | 'printer' | 'appearance' | 'inventory' | 'account' | 'data';
+
+const SECTIONS: Array<{ id: SectionId; label: string; hint: string; Icon: typeof StoreIcon }> = [
+  { id: 'store', label: 'Store', hint: 'Name and details printed on receipts', Icon: StoreIcon },
+  { id: 'categories', label: 'Categories', hint: 'How products are grouped', Icon: CategoryIcon },
+  { id: 'printer', label: 'Receipt printer', hint: 'Thermal printer and test print', Icon: PrintIcon },
+  { id: 'appearance', label: 'Appearance', hint: 'Light or dark', Icon: AppearanceIcon },
+  { id: 'inventory', label: 'Inventory', hint: 'Low-stock level', Icon: InventoryIcon },
+  { id: 'account', label: 'Account & security', hint: 'Login name and password', Icon: LockIcon },
+  { id: 'data', label: 'Backup & data', hint: 'Back up, restore, reports', Icon: BackupIcon },
+];
+
+const daysAgo = (date: Date) => Math.floor((Date.now() - date.getTime()) / 86400000);
+
+const SectionHeader: React.FC<{ title: string; description: string; action?: React.ReactNode }> = ({ title, description, action }) => (
+  <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1.5, mb: 2.5 }}>
+    <Box>
+      <Typography variant="h6">{title}</Typography>
+      <Typography variant="body2" color="text.secondary">
+        {description}
+      </Typography>
+    </Box>
+    {action}
+  </Box>
+);
+
+const Panel: React.FC<{ title: string; children: React.ReactNode; tone?: 'error' }> = ({ title, children, tone }) => (
+  <Box sx={{ border: 1, borderColor: tone ? 'error.main' : 'divider', borderRadius: '12px', p: 2, mb: 2 }}>
+    <Typography variant="subtitle2" color={tone ? 'error.main' : 'text.primary'} sx={{ mb: 1.5 }}>
+      {title}
+    </Typography>
+    {children}
+  </Box>
+);
+
 const Settings: React.FC = () => {
   const { setThemeName, themeName } = useContext(ThemeContext);
   const storeSettings = useContext(StoreSettingsContext);
   const salesContext = useContext(SalesContext);
   const productsContext = useContext(ProductsContext);
   const { printers, selectedPrinter, setSelectedPrinter, refreshPrinters, testPrint, isLoading } = usePrinter();
+  const notify = useNotify();
 
-  const notify = useNotify();;
-  const [storeForm, setStoreForm] = useState({
-    storeName: storeSettings.storeName,
-    storeAddress: storeSettings.storeAddress,
+  const [section, setSection] = useState<SectionId>('store');
+
+  // ---------- store ----------
+  const savedStore = {
+    storeName: storeSettings.storeName || '',
+    storeAddress: storeSettings.storeAddress || '',
     phoneNumber: storeSettings.phoneNumber || '',
     email: storeSettings.email || '',
     birNumber: storeSettings.birNumber || '',
-  });
-  const [clearDataDialog, setClearDataDialog] = useState(false);
-  const [importDialog, setImportDialog] = useState(false);
-  const [notifications, setNotifications] = useState({
-    lowStock: true,
-    dailyReport: true,
-    backupReminder: false,
-  });
-  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  };
+  const [storeForm, setStoreForm] = useState(savedStore);
+  const storeDirty = (Object.keys(savedStore) as Array<keyof typeof savedStore>).some((k) => storeForm[k] !== savedStore[k]);
+  const saveStore = (e: React.FormEvent) => {
+    e.preventDefault();
+    storeSettings.updateStoreSettings({ ...storeForm, storeName: storeForm.storeName.trim(), storeAddress: storeForm.storeAddress.trim() });
+    notify('Store details saved', 'success');
+  };
 
-  // Category management state
-  const [categoryDialog, setCategoryDialog] = useState<{ open: boolean; mode: 'add' | 'edit'; category?: any }>({ open: false, mode: 'add' });
-  const [categoryForm, setCategoryForm] = useState({ name: '', description: '', icon: 'CategoryIcon' });
-  const [deleteDialog, setDeleteDialog] = useState<{ open: boolean; categoryId?: string }>({ open: false });
+  // ---------- categories ----------
+  const { categories, products } = productsContext;
+  const productCount = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of products) map.set(p.category, (map.get(p.category) ?? 0) + 1);
+    return map;
+  }, [products]);
+  const [categoryDialog, setCategoryDialog] = useState<{ id: string | null; name: string; icon: string } | null>(null);
+  const [categoryError, setCategoryError] = useState('');
+  const categoryFileRef = useRef<HTMLInputElement>(null);
 
-  // Available icons for category selection
-  const availableIcons = [
-    { name: 'CategoryIcon', icon: <CategoryIcon />, label: 'Default Category' },
-    { name: 'LiquorIcon', icon: <LiquorIcon />, label: 'Liquor & Alcohol' },
-    { name: 'CoffeeIcon', icon: <CoffeeIcon />, label: 'Coffee & Tea' },
-    { name: 'CigarettesIcon', icon: <CigarettesIcon />, label: 'Cigarettes & Tobacco' },
-    { name: 'WholesaleIcon', icon: <WholesaleIcon />, label: 'Wholesale Items' },
-    { name: 'JunkFoodIcon', icon: <JunkFoodIcon />, label: 'Junk Food & Snacks' },
-    { name: 'CondimentsIcon', icon: <CondimentsIcon />, label: 'Condiments & Sauces' },
-    { name: 'IngredientsIcon', icon: <IngredientsIcon />, label: 'Cooking Ingredients' },
-    { name: 'CanGoodsIcon', icon: <CanGoodsIcon />, label: 'Canned Goods' },
-    { name: 'DetergentIcon', icon: <DetergentIcon />, label: 'Detergent & Cleaners' },
-    { name: 'NoodlesIcon', icon: <NoodlesIcon />, label: 'Noodles & Pasta' },
-    { name: 'KitchenThingsIcon', icon: <KitchenThingsIcon />, label: 'Kitchen Items' },
-    { name: 'LaundryIcon', icon: <LaundryIcon />, label: 'Laundry Products' },
-    { name: 'CosmeticsIcon', icon: <CosmeticsIcon />, label: 'Cosmetics & Beauty' },
-    { name: 'CookingBakingIcon', icon: <CookingBakingIcon />, label: 'Baking Supplies' },
-    { name: 'DrinksIcon', icon: <DrinksIcon />, label: 'Beverages & Drinks' },
-    { name: 'CerealsIcon', icon: <CerealsIcon />, label: 'Cereals & Grains' },
-    { name: 'DressingsIcon', icon: <DressingsIcon />, label: 'Dressings & Oils' },
-    { name: 'ButterIcon', icon: <ButterIcon />, label: 'Butter & Spreads' },
-    { name: 'FabricConditionerIcon', icon: <FabricConditionerIcon />, label: 'Fabric Care' },
-    { name: 'CandiesIcon', icon: <CandiesIcon />, label: 'Candies & Sweets' },
-    { name: 'ChocolateIcon', icon: <ChocolateIcon />, label: 'Chocolate' },
-    { name: 'FrozenIcon', icon: <FrozenIcon />, label: 'Frozen Foods' },
-    { name: 'IceCreamIcon', icon: <IceCreamIcon />, label: 'Ice Cream & Desserts' },
-    { name: 'ToiletriesIcon', icon: <ToiletriesIcon />, label: 'Toiletries & Hygiene' },
-    { name: 'MilkIcon', icon: <MilkIcon />, label: 'Milk & Dairy' },
-    { name: 'BreadIcon', icon: <BreadIcon />, label: 'Bread & Bakery' },
-    { name: 'BasketIcon', icon: <BasketIcon />, label: 'General Shopping' },
-    { name: 'GroceryIcon', icon: <GroceryIcon />, label: 'Grocery Store' },
-    { name: 'PizzaIcon', icon: <PizzaIcon />, label: 'Pizza & Fast Food' },
-    { name: 'EggIcon', icon: <EggIcon />, label: 'Eggs & Protein' },
-    { name: 'LunchIcon', icon: <LunchIcon />, label: 'Lunch & Meals' },
-    { name: 'AlcoholIcon', icon: <AlcoholIcon />, label: 'Alcoholic Beverages' },
-    { name: 'FloristIcon', icon: <FloristIcon />, label: 'Flowers & Plants' },
-    { name: 'PharmacyIcon', icon: <PharmacyIcon />, label: 'Pharmacy & Medicine' },
-    { name: 'HomeIcon', icon: <HomeIcon />, label: 'Home & Living' },
-    { name: 'CleaningIcon', icon: <DetergentIcon />, label: 'Cleaning Supplies' },
-    { name: 'BathroomIcon', icon: <BathroomIcon />, label: 'Bathroom Items' },
-    { name: 'ShoppingIcon', icon: <ShoppingIcon />, label: 'Shopping & Retail' },
-    { name: 'FoodBankIcon', icon: <FoodBankIcon />, label: 'Food Bank Items' },
-    { name: 'RiceIcon', icon: <RiceIcon />, label: 'Rice & Staples' },
-    { name: 'YardIcon', icon: <YardIcon />, label: 'Garden & Yard' },
-  ];
+  const saveCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!categoryDialog) return;
+    const name = categoryDialog.name.trim();
+    if (!name) return setCategoryError('Give the category a name');
+    const clash = categories.find((c) => c.id !== categoryDialog.id && c.name.toLowerCase() === name.toLowerCase());
+    if (clash) return setCategoryError(`“${clash.name}” already exists`);
+    if (categoryDialog.id) {
+      const original = categories.find((c) => c.id === categoryDialog.id)!;
+      productsContext.updateCategory({ ...original, name, icon: categoryDialog.icon });
+      // Products point at their category by name, so a rename carries them along
+      if (original.name !== name) {
+        const moved = products.filter((p) => p.category === original.name).length;
+        if (moved) productsContext.importProducts(products.map((p) => (p.category === original.name ? { ...p, category: name } : p)));
+        notify(`Renamed to ${name}${moved ? ` · ${moved} product${moved !== 1 ? 's' : ''} moved with it` : ''}`, 'success');
+      } else {
+        notify(`Saved ${name}`, 'success');
+      }
+    } else {
+      productsContext.addCategory({ id: Date.now().toString(), name, icon: categoryDialog.icon });
+      notify(`Added ${name}`, 'success');
+    }
+    setCategoryDialog(null);
+  };
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const deleteCategory = (id: string) => {
+    const category = categories.find((c) => c.id === id);
+    if (!category) return;
+    productsContext.deleteCategory(id);
+    notify(`Deleted ${category.name}`, { severity: 'info', action: { label: 'Undo', onClick: () => productsContext.addCategory(category) } });
+  };
 
-  const handleSaveStoreSettings = () => {
-    storeSettings.setStoreName(storeForm.storeName);
-    storeSettings.setStoreAddress(storeForm.storeAddress);
-    storeSettings.setPhoneNumber?.(storeForm.phoneNumber);
-    storeSettings.setEmail?.(storeForm.email);
-    storeSettings.setBirNumber?.(storeForm.birNumber);
-    notify('Store settings saved successfully!', 'success');
+  const exportCategories = () => {
+    const q = (t: string) => `"${t.replace(/"/g, '""')}"`;
+    const csv = ['id,name,icon', ...categories.map((c) => [q(c.id), q(c.name), q(c.icon ?? '')].join(','))].join('\n');
+    saveAs(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `categories_${new Date().toISOString().split('T')[0]}.csv`);
+    notify(`Exported ${categories.length} categories`, 'success');
+  };
+
+  const importCategories = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const lines = String(e.target?.result ?? '')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      // Split on commas outside quotes
+      const cells = (line: string) => (line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) ?? []).map((c) => c.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"').trim());
+      const header = lines[0] ? cells(lines[0]).map((h) => h.toLowerCase()) : [];
+      const hasHeader = header.includes('name');
+      const nameAt = hasHeader ? header.indexOf('name') : 1;
+      const idAt = hasHeader ? header.indexOf('id') : 0;
+      const iconAt = hasHeader ? header.indexOf('icon') : -1;
+      let added = 0;
+      const known = new Set(categories.map((c) => c.name.toLowerCase()));
+      (hasHeader ? lines.slice(1) : lines).forEach((line, i) => {
+        const row = cells(line);
+        const name = row[nameAt] ?? '';
+        if (!name || known.has(name.toLowerCase())) return;
+        known.add(name.toLowerCase());
+        productsContext.addCategory({ id: (idAt >= 0 && row[idAt]) || `${Date.now()}${i}`, name, icon: (iconAt >= 0 && row[iconAt]) || undefined });
+        added += 1;
+      });
+      notify(added ? `Imported ${added} new categor${added !== 1 ? 'ies' : 'y'}` : 'Every category in that file already exists', added ? 'success' : 'info');
+    };
+    reader.readAsText(file);
+  };
+
+  // ---------- inventory ----------
+  const [lowStock, setLowStock] = useState(String(getLowStockThreshold()));
+
+  // ---------- account ----------
+  const [account, setAccount] = useState({ current: '', username: getLoginUsername(), password: '', confirm: '' });
+  const [accountErrors, setAccountErrors] = useState<Record<string, string>>({});
+  const [showPasswords, setShowPasswords] = useState(false);
+  const saveAccount = (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors: Record<string, string> = {};
+    if (account.current !== getLoginPassword()) errors.current = 'That isn’t the current password';
+    if (!account.username.trim()) errors.username = 'Enter a username';
+    if (account.password && account.password.length < 4) errors.password = 'Use at least 4 characters';
+    if (account.password !== account.confirm) errors.confirm = 'The passwords don’t match';
+    setAccountErrors(errors);
+    if (Object.keys(errors).length) return;
+    setLogin(account.username.trim(), account.password || getLoginPassword());
+    setAccount({ current: '', username: account.username.trim(), password: '', confirm: '' });
+    notify(account.password ? 'Login name and password updated' : 'Login name updated', 'success');
+  };
+
+  // ---------- backup & data ----------
+  const [lastBackup, setLastBackup] = useState(getLastBackupAt);
+  const backupFileRef = useRef<HTMLInputElement>(null);
+  const [restore, setRestore] = useState<(ParsedBackup & { fileName: string }) | null>(null);
+  const [eraseOpen, setEraseOpen] = useState(false);
+  const [eraseText, setEraseText] = useState('');
+
+  const downloadBackup = () => {
+    const backup = buildBackup();
+    saveAs(new Blob([JSON.stringify(backup)], { type: 'application/json' }), `pos_backup_${backup.exportedAt.slice(0, 10)}.json`);
+    markBackedUp();
+    setLastBackup(getLastBackupAt());
+    notify(`Backup saved: ${Object.keys(backup.data).length} kinds of data`, 'success');
+  };
+
+  const chooseRestoreFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const parsed = parseBackup(String(e.target?.result ?? ''));
+      if ('error' in parsed) notify(parsed.error, 'error');
+      else if (Object.keys(parsed.data).length === 0) notify('That backup is empty', 'warning');
+      else setRestore({ ...parsed, fileName: file.name });
+    };
+    reader.readAsText(file);
+  };
+
+  // Every page reads its data when it loads, so the app reloads after a restore or erase
+  const applyRestore = () => {
+    if (!restore) return;
+    for (const [key, value] of Object.entries(restore.data)) localStorage.setItem(key, value);
+    window.location.reload();
+  };
+
+  const eraseAll = () => {
+    for (const { key, erasable } of BACKUP_ITEMS) if (erasable) localStorage.removeItem(key);
+    localStorage.removeItem('pos_basket');
+    sessionStorage.removeItem('pos_basket');
+    window.location.reload();
   };
 
   const handleExportSales = async () => {
@@ -494,1793 +562,643 @@ const Settings: React.FC = () => {
     const buffer = await (workbook as any).xlsx.writeBuffer();
     const data = new Blob([buffer as ArrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     saveAs(data, `sales_report_${new Date().toISOString().split('T')[0]}.xlsx`);
-    notify('Beautiful sales report exported successfully!', 'success');
+    notify('Sales report downloaded', 'success');
   };
 
-  const handleExportAllData = () => {
-    const data = {
-      sales: salesContext.sales,
-      receipts: salesContext.receipts,
-      settings: {
-        storeName: storeSettings.storeName,
-        storeAddress: storeSettings.storeAddress,
-        phoneNumber: storeSettings.phoneNumber,
-        email: storeSettings.email,
-        birNumber: storeSettings.birNumber,
-        theme: themeName,
-      },
-      timestamp: new Date().toISOString(),
-    };
+  // ---------- render ----------
 
-    const jsonStr = JSON.stringify(data, null, 2);
-    const dataBlob = new Blob([jsonStr], { type: 'application/json' });
-    saveAs(dataBlob, `pos_backup_${new Date().toISOString().split('T')[0]}.json`);
-    notify('Full backup exported successfully!', 'success');
-  };
+  const backupAge = lastBackup ? daysAgo(lastBackup) : null;
+  const backupStale = backupAge === null || backupAge >= 7;
+  const current = SECTIONS.find((s) => s.id === section)!;
 
-  const handleImportData = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(e.target?.result as string);
-        
-        if (data.sales) {
-          salesContext.setSales(data.sales);
-          localStorage.setItem('pos_sales', JSON.stringify(data.sales));
-        }
-        
-        if (data.receipts) {
-          salesContext.setReceipts?.(data.receipts);
-          localStorage.setItem('pos_receipts', JSON.stringify(data.receipts));
-        }
-        
-        if (data.settings) {
-          if (data.settings.storeName) storeSettings.setStoreName(data.settings.storeName);
-          if (data.settings.storeAddress) storeSettings.setStoreAddress(data.settings.storeAddress);
-          if (data.settings.phoneNumber) storeSettings.setPhoneNumber?.(data.settings.phoneNumber);
-          if (data.settings.email) storeSettings.setEmail?.(data.settings.email);
-          if (data.settings.birNumber) storeSettings.setBirNumber?.(data.settings.birNumber);
-          if (data.settings.theme) setThemeName(data.settings.theme);
-        }
-
-        notify('Data imported successfully!', 'success');
-        setImportDialog(false);
-      } catch (error) {
-        notify('Error importing data. Please check the file format.', 'error');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleClearAllData = () => {
-    salesContext.setSales([]);
-    salesContext.setReceipts([]);
-    notify('All data cleared successfully!', 'success');
-  };
-
-  // Category management functions
-  const handleAddCategory = () => {
-    setCategoryForm({ name: '', description: '', icon: 'CategoryIcon' });
-    setCategoryDialog({ open: true, mode: 'add' });
-  };
-
-  const handleEditCategory = (category: any) => {
-    setCategoryForm({ name: category.name, description: '', icon: category.icon || 'CategoryIcon' });
-    setCategoryDialog({ open: true, mode: 'edit', category });
-  };
-
-  const handleSaveCategory = () => {
-    if (!categoryForm.name.trim()) {
-      notify('Category name is required!', 'error');
-      return;
-    }
-
-    if (categoryDialog.mode === 'add') {
-      const newCategory = {
-        id: Date.now().toString(),
-        name: categoryForm.name.trim(),
-        icon: categoryForm.icon,
-      };
-      productsContext.addCategory(newCategory);
-      notify('Category added successfully!', 'success');
-    } else if (categoryDialog.mode === 'edit' && categoryDialog.category) {
-      const updatedCategory = {
-        ...categoryDialog.category,
-        name: categoryForm.name.trim(),
-        icon: categoryForm.icon,
-      };
-      productsContext.updateCategory(updatedCategory);
-      notify('Category updated successfully!', 'success');
-    }
-
-    setCategoryDialog({ open: false, mode: 'add' });
-    setCategoryForm({ name: '', description: '', icon: 'CategoryIcon' });
-  };
-
-  const handleDeleteCategory = (categoryId: string) => {
-    setDeleteDialog({ open: true, categoryId });
-  };
-
-  const handleConfirmDelete = () => {
-    if (deleteDialog.categoryId) {
-      // Check if category has products
-      const hasProducts = productsContext.products.some(p => p.category === 
-        productsContext.categories.find(c => c.id === deleteDialog.categoryId)?.name
-      );
-      
-      if (hasProducts) {
-        notify('Cannot delete category with products. Please move or delete products first.', 'error');
-      } else {
-        productsContext.deleteCategory(deleteDialog.categoryId);
-        notify('Category deleted successfully!', 'success');
-      }
-    }
-    setDeleteDialog({ open: false });
-  };
-
-  const handleExportCategories = () => {
-    // Create CSV content with id,name format
-    const csvContent = [
-      'id,name', // Header row
-      ...productsContext.categories.map(cat => `${cat.id},"${cat.name}"`)
-    ].join('\n');
-    
-    const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    saveAs(csvBlob, `categories_${new Date().toISOString().split('T')[0]}.csv`);
-    notify('Categories exported successfully!', 'success');
-  };
-
-  const handleImportCategories = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const csvText = e.target?.result as string;
-          const lines = csvText.split('\n').map(line => line.trim()).filter(line => line);
-          
-          if (lines.length === 0) {
-            notify('CSV file is empty!', 'error');
-            return;
-          }
-          
-          // Check if first line is header (id,name)
-          const hasHeader = lines[0].toLowerCase().includes('id') && lines[0].toLowerCase().includes('name');
-          const dataLines = hasHeader ? lines.slice(1) : lines;
-          
-          let importedCount = 0;
-          dataLines.forEach((line) => {
-            const parts = line.split(',');
-            if (parts.length >= 2) {
-              const id = parts[0].trim().replace(/"/g, '');
-              const name = parts[1].trim().replace(/"/g, '');
-              
-              if (id && name) {
-                // Check if category doesn't already exist
-                if (!productsContext.categories.some(c => c.id === id || c.name === name)) {
-                  const category = { id, name };
-                  productsContext.addCategory(category);
-                  importedCount++;
-                }
-              }
-            }
-          });
-          
-          if (importedCount > 0) {
-            notify(`${importedCount} categories imported successfully!`, 'success');
-          } else {
-            notify('No new categories found to import (all categories already exist)', 'warning');
-          }
-        } catch (error) {
-          notify('Error importing CSV file. Please check file format.', 'error');
-        }
-      };
-      reader.readAsText(file);
-    }
-    // Reset file input
-    if (event.target) {
-      event.target.value = '';
-    }
-  };
-
-  const getThemeIcon = (theme: string) => {
-    switch (theme) {
-      case 'dark': return <DarkModeIcon />;
-      case 'light': return <LightModeIcon />;
-      default: return <ThemeIcon />;
-    }
-  };
-
-  const getThemeDescription = (theme: string) => {
-    switch (theme) {
-      case 'dark': return 'Dark theme for low-light environments';
-      case 'light': return 'Light theme for bright environments';
-      default: return 'System theme follows device preferences';
-    }
-  };
-
-  const getSectionIcon = (section: string) => {
+  const body = (() => {
     switch (section) {
-      case 'store': return <StoreIcon />;
-      case 'categories': return <CategoryIcon />;
-      case 'appearance': return <ThemeIcon />;
-      case 'printer': return <PrintIcon />;
-      case 'notifications': return <NotificationIcon />;
-      case 'data': return <BackupIcon />;
-      case 'security': return <SecurityIcon />;
-      default: return <SettingsIcon />;
-    }
-  };
-
-  const sections = [
-    { id: 'store', title: 'Store Information', description: 'Configure your store details and contact information' },
-    { id: 'categories', title: 'Category Management', description: 'Add, edit, and organize your product categories' },
-    { id: 'appearance', title: 'Appearance & Theme', description: 'Customize the look and feel of your application' },
-    { id: 'printer', title: 'Thermal Printer', description: 'Configure thermal receipt printer and printing options' },
-    { id: 'notifications', title: 'Notifications', description: 'Manage alerts and notification preferences' },
-    { id: 'data', title: 'Data Management', description: 'Export, import, and manage your business data' },
-  ];
-
-  return (
-    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
-      {/* Modern Header */}
-      <Box sx={{ mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Avatar sx={{ bgcolor: 'primary.main', width: 56, height: 56 }}>
-              <SettingsIcon sx={{ fontSize: 32 }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} color="primary.main">
-                Application Settings
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Configure your store settings and preferences
-              </Typography>
-            </Box>
-          </Box>
-          <Stack direction="row" spacing={2}>
-            <Chip 
-              icon={getThemeIcon(themeName)} 
-              label={`${themeName.charAt(0).toUpperCase() + themeName.slice(1)} Theme`}
-              color="primary" 
-              variant="outlined"
-              sx={{ borderRadius: 3, px: 2 }}
-            />
-          </Stack>
-        </Box>
-
-        {/* Quick Stats */}
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'info.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <ReportIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="info.main">
-                  {salesContext.sales.length}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Total Sales Records
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'success.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <ReceiptIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="success.main">
-                  {salesContext.receipts.length}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Receipt Records
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'warning.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <BusinessIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="warning.main">
-                  {storeSettings.storeName ? '✓' : '⚠'}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Store Setup
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={6} md={3}>
-            <Card sx={{ borderRadius: 3, boxShadow: 3 }}>
-              <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                <Avatar sx={{ bgcolor: 'secondary.main', width: 50, height: 50, mx: 'auto', mb: 2 }}>
-                  <PrintIcon sx={{ fontSize: 28 }} />
-                </Avatar>
-                <Typography variant="h5" fontWeight={700} color="secondary.main">
-                  {printers.length}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Available Printers
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      </Box>
-
-      {/* Settings Sections */}
-      <Box>
-        {sections.map((section) => (
-          <Card key={section.id} sx={{ borderRadius: 3, boxShadow: 3, mb: 3 }}>
-            <Accordion 
-              expanded={expandedSection === section.id}
-              onChange={() => setExpandedSection(expandedSection === section.id ? null : section.id)}
-              sx={{ 
-                '&:before': { display: 'none' },
-                boxShadow: 'none',
-                borderRadius: 3,
-              }}
-            >
-              <AccordionSummary 
-                expandIcon={<ExpandMoreIcon />}
-                sx={{ 
-                  p: 3,
-                  '&:hover': { bgcolor: 'grey.50' },
-                  borderRadius: 3,
-                }}
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <Avatar sx={{ bgcolor: 'primary.main', width: 50, height: 50 }}>
-                    {getSectionIcon(section.id)}
-                  </Avatar>
-                  <Box>
-                    <Typography variant="h6" fontWeight={700}>
-                      {section.title}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {section.description}
-                    </Typography>
-                  </Box>
+      case 'store':
+        return (
+          <Box component="form" onSubmit={saveStore} noValidate>
+            <SectionHeader title="Store" description="These details appear at the top of every receipt." />
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) 280px' }, gap: 3, alignItems: 'start' }}>
+              <Box sx={{ display: 'grid', gap: 2 }}>
+                <TextField label="Store name" value={storeForm.storeName} onChange={(e) => setStoreForm({ ...storeForm, storeName: e.target.value })} />
+                <TextField label="Address" value={storeForm.storeAddress} onChange={(e) => setStoreForm({ ...storeForm, storeAddress: e.target.value })} multiline minRows={2} />
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
+                  <TextField label="Phone" value={storeForm.phoneNumber} onChange={(e) => setStoreForm({ ...storeForm, phoneNumber: e.target.value })} inputProps={{ inputMode: 'tel' }} />
+                  <TextField label="Email" value={storeForm.email} onChange={(e) => setStoreForm({ ...storeForm, email: e.target.value })} inputProps={{ inputMode: 'email' }} />
                 </Box>
-              </AccordionSummary>
-              
-              <AccordionDetails sx={{ p: 3, pt: 0 }}>
-                {section.id === 'store' && (
-                  <Stack spacing={3}>
-                    <Grid container spacing={3}>
-                      <Grid item xs={12} md={6}>
-                        <TextField
-                          fullWidth
-                          label="Store Name"
-                          value={storeForm.storeName}
-                          onChange={(e) => setStoreForm({ ...storeForm, storeName: e.target.value })}
-                          InputProps={{
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <BusinessIcon color="action" />
-                              </InputAdornment>
-                            ),
-                          }}
-                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={6}>
-                        <TextField
-                          fullWidth
-                          label="Store Address"
-                          value={storeForm.storeAddress}
-                          onChange={(e) => setStoreForm({ ...storeForm, storeAddress: e.target.value })}
-                          InputProps={{
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <LocationIcon color="action" />
-                              </InputAdornment>
-                            ),
-                          }}
-                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={6}>
-                        <TextField
-                          fullWidth
-                          label="Phone Number"
-                          value={storeForm.phoneNumber}
-                          onChange={(e) => setStoreForm({ ...storeForm, phoneNumber: e.target.value })}
-                          InputProps={{
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <PhoneIcon color="action" />
-                              </InputAdornment>
-                            ),
-                          }}
-                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={6}>
-                        <TextField
-                          fullWidth
-                          label="Email Address"
-                          type="email"
-                          value={storeForm.email}
-                          onChange={(e) => setStoreForm({ ...storeForm, email: e.target.value })}
-                          InputProps={{
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <EmailIcon color="action" />
-                              </InputAdornment>
-                            ),
-                          }}
-                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-                        />
-                      </Grid>
-                      <Grid item xs={12} md={6}>
-                        <TextField
-                          fullWidth
-                          label="BIR No."
-                          value={storeForm.birNumber}
-                          onChange={(e) => setStoreForm({ ...storeForm, birNumber: e.target.value })}
-                          InputProps={{
-                            startAdornment: (
-                              <InputAdornment position="start">
-                                <ReceiptIcon color="action" />
-                              </InputAdornment>
-                            ),
-                          }}
-                          sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3 } }}
-                        />
-                      </Grid>
-                    </Grid>
-                    <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <Button
-                        variant="contained"
-                        startIcon={<SaveIcon />}
-                        onClick={handleSaveStoreSettings}
-                        sx={{ borderRadius: 3, px: 4 }}
-                      >
-                        Save Store Settings
+                <TextField label="BIR / TIN number" value={storeForm.birNumber} onChange={(e) => setStoreForm({ ...storeForm, birNumber: e.target.value })} helperText="Printed under the address" />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Button type="submit" variant="contained" disabled={!storeDirty}>
+                    Save
+                  </Button>
+                  {storeDirty && (
+                    <>
+                      <Button color="inherit" onClick={() => setStoreForm(savedStore)}>
+                        Discard
                       </Button>
-                    </Box>
-                  </Stack>
-                )}
-
-                {section.id === 'categories' && (
-                  <Stack spacing={3}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="subtitle1" fontWeight={700}>
-                        Product Categories
+                      <Typography variant="caption" color="warning.main" fontWeight={700}>
+                        Unsaved changes
                       </Typography>
-                      <Stack direction="row" spacing={1}>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept=".csv"
-                          onChange={handleImportCategories}
-                          style={{ display: 'none' }}
-                        />
-                        <Button
-                          size="small"
-                          startIcon={<UploadIcon />}
-                          onClick={() => fileInputRef.current?.click()}
-                          sx={{ borderRadius: 2 }}
-                        >
-                          Import
-                        </Button>
-                        <Button
-                          size="small"
-                          startIcon={<ExportIcon />}
-                          onClick={handleExportCategories}
-                          sx={{ borderRadius: 2 }}
-                        >
-                          Export
-                        </Button>
-                        <Button
-                          variant="contained"
-                          size="small"
-                          startIcon={<AddIcon />}
-                          onClick={handleAddCategory}
-                          sx={{ borderRadius: 2 }}
-                        >
-                          Add Category
-                        </Button>
-                      </Stack>
-                    </Box>
-
-                    {productsContext.categories.length === 0 ? (
-                      <Paper sx={{ p: 4, textAlign: 'center', borderRadius: 3, bgcolor: 'grey.50' }}>
-                        <CategoryIcon sx={{ fontSize: 64, color: 'grey.400', mb: 2 }} />
-                        <Typography variant="h6" color="text.secondary" gutterBottom>
-                          No Categories Yet
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                          Create your first product category to organize your inventory
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          startIcon={<AddIcon />}
-                          onClick={handleAddCategory}
-                          sx={{ borderRadius: 3 }}
-                        >
-                          Create First Category
-                        </Button>
-                      </Paper>
-                    ) : (
-                      <Grid container spacing={2}>
-                        {productsContext.categories.map((category) => {
-                          const productCount = productsContext.products.filter(p => p.category === category.name).length;
-                          return (
-                            <Grid item xs={12} sm={6} md={4} key={category.id}>
-                              <Card 
-                                sx={{ 
-                                  borderRadius: 3, 
-                                  transition: 'all 0.3s',
-                                  '&:hover': {
-                                    transform: 'translateY(-2px)',
-                                    boxShadow: 4,
-                                  },
-                                  border: '1px solid',
-                                  borderColor: 'grey.200',
-                                }}
-                              >
-                                <CardContent sx={{ p: 3 }}>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-                                    <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40 }}>
-                                      {availableIcons.find(icon => icon.name === category.icon)?.icon || <CategoryIcon />}
-                                    </Avatar>
-                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
-                                      <IconButton
-                                        size="small"
-                                        onClick={() => handleEditCategory(category)}
-                                        sx={{ bgcolor: 'primary.50', '&:hover': { bgcolor: 'primary.100' } }}
-                                      >
-                                        <EditIcon fontSize="small" />
-                                      </IconButton>
-                                      <IconButton
-                                        size="small"
-                                        onClick={() => handleDeleteCategory(category.id)}
-                                        sx={{ bgcolor: 'error.50', '&:hover': { bgcolor: 'error.100' } }}
-                                        disabled={productCount > 0}
-                                      >
-                                        <DeleteIcon fontSize="small" />
-                                      </IconButton>
-                                    </Box>
-                                  </Box>
-                                  
-                                  <Typography variant="h6" fontWeight={700} gutterBottom>
-                                    {category.name}
-                                  </Typography>
-                                  
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2 }}>
-                                    <Chip 
-                                      label={`${productCount} product${productCount !== 1 ? 's' : ''}`}
-                                      size="small"
-                                      color={productCount > 0 ? 'primary' : 'default'}
-                                      variant="outlined"
-                                    />
-                                    {productCount > 0 && (
-                                      <Tooltip title="Category has products - cannot delete">
-                                        <InfoIcon color="info" fontSize="small" />
-                                      </Tooltip>
-                                    )}
-                                  </Box>
-                                </CardContent>
-                              </Card>
-                            </Grid>
-                          );
-                        })}
-                      </Grid>
-                    )}
-                  </Stack>
-                )}
-
-                {section.id === 'appearance' && (
-                  <Stack spacing={3}>
-                    <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                      Choose Theme
-                    </Typography>
-                    <Grid container spacing={2}>
-                      {['light', 'dark'].map((themeOption) => (
-                        <Grid item xs={12} sm={6} key={themeOption}>
-                          <Card 
-                            sx={{ 
-                              borderRadius: 3, 
-                              border: '2px solid',
-                              borderColor: themeName === themeOption ? 'primary.main' : 'transparent',
-                              cursor: 'pointer',
-                              transition: 'all 0.3s',
-                              '&:hover': {
-                                transform: 'translateY(-2px)',
-                                boxShadow: 4,
-                              }
-                            }}
-                            onClick={() => setThemeName(themeOption as any)}
-                          >
-                            <CardContent sx={{ p: 3, textAlign: 'center' }}>
-                              <Avatar 
-                                sx={{ 
-                                  bgcolor: themeName === themeOption ? 'primary.main' : 'grey.300',
-                                  width: 60, 
-                                  height: 60, 
-                                  mx: 'auto', 
-                                  mb: 2 
-                                }}
-                              >
-                                {getThemeIcon(themeOption)}
-                              </Avatar>
-                              <Typography variant="h6" fontWeight={700} gutterBottom>
-                                {themeOption.charAt(0).toUpperCase() + themeOption.slice(1)} Theme
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                {getThemeDescription(themeOption)}
-                              </Typography>
-                              {themeName === themeOption && (
-                                <Chip 
-                                  label="Active" 
-                                  color="primary" 
-                                  size="small" 
-                                  icon={<CheckIcon />}
-                                  sx={{ mt: 2 }}
-                                />
-                              )}
-                            </CardContent>
-                          </Card>
-                        </Grid>
-                      ))}
-                    </Grid>
-                  </Stack>
-                )}
-
-                {section.id === 'printer' && (
-                  <Stack spacing={3}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="subtitle1" fontWeight={700}>
-                        Thermal Printer Configuration
-                      </Typography>
-                      <Button
-                        variant="outlined"
-                        startIcon={<RefreshIcon />}
-                        onClick={refreshPrinters}
-                        disabled={isLoading}
-                        sx={{ borderRadius: 3 }}
-                      >
-                        {isLoading ? 'Scanning...' : 'Refresh Printers'}
-                      </Button>
-                    </Box>
-
-                    <Grid container spacing={3}>
-                      <Grid item xs={12} md={8}>
-                        <FormControl fullWidth>
-                          <InputLabel>Select Thermal Printer</InputLabel>
-                          <Select
-                            value={selectedPrinter || ''}
-                            label="Select Thermal Printer"
-                            onChange={(e) => setSelectedPrinter(e.target.value || null)}
-                            sx={{ borderRadius: 3 }}
-                          >
-                            {printers.length === 0 && (
-                              <MenuItem value="">
-                                <Typography color="text.secondary">No thermal printers found</Typography>
-                              </MenuItem>
-                            )}
-                            {printers.map((printer) => (
-                              <MenuItem key={printer.name} value={printer.name}>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                                  <PrintIcon color={printer.isDefault ? 'primary' : 'action'} />
-                                  <Box sx={{ flex: 1 }}>
-                                    <Typography fontWeight={600}>{printer.name}</Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                      {printer.connection} • {printer.manufacturer}
-                                    </Typography>
-                                  </Box>
-                                  {printer.isDefault && (
-                                    <Chip label="Default" size="small" color="primary" />
-                                  )}
-                                </Box>
-                              </MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </Grid>
-                      <Grid item xs={12} md={4}>
-                        <Stack spacing={2}>
-                          <Button
-                            variant="contained"
-                            startIcon={<PrintIcon />}
-                            onClick={async () => {
-                              if (selectedPrinter) {
-                                const success = await testPrint();
-                                notify(success ? 'Test receipt printed successfully!' : 'Failed to print test receipt', success ? 'success' : 'error');
-                              }
-                            }}
-                            disabled={!selectedPrinter || isLoading}
-                            fullWidth
-                            sx={{ borderRadius: 3 }}
-                          >
-                            Test Print
-                          </Button>
-                          <Chip 
-                            label={`${printers.length} printer${printers.length !== 1 ? 's' : ''} detected`}
-                            color={printers.length > 0 ? 'success' : 'warning'}
-                            variant="outlined"
-                          />
-                        </Stack>
-                      </Grid>
-                    </Grid>
-                    
-                    {/* Printer Info */}
-                    {selectedPrinter && (
-                      <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'success.200', bgcolor: 'success.50' }}>
-                        <CardContent sx={{ p: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                            <Avatar sx={{ bgcolor: 'success.main' }}>
-                              <PrintIcon />
-                            </Avatar>
-                            <Typography variant="h6" fontWeight={700} color="success.dark">
-                              Selected Printer
-                            </Typography>
-                          </Box>
-                          <Grid container spacing={2}>
-                            <Grid item xs={12} sm={6}>
-                              <Typography variant="body2" color="text.secondary">Name:</Typography>
-                              <Typography variant="body1" fontWeight={600}>{selectedPrinter}</Typography>
-                            </Grid>
-                            <Grid item xs={12} sm={6}>
-                              <Typography variant="body2" color="text.secondary">Status:</Typography>
-                              <Chip 
-                                label="Ready to Print" 
-                                color="success" 
-                                size="small" 
-                                icon={<CheckIcon />}
-                              />
-                            </Grid>
-                          </Grid>
-                        </CardContent>
-                      </Card>
-                    )}
-
-                    {printers.length === 0 && !isLoading && (
-                      <Paper sx={{ p: 3, borderRadius: 3, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                          <WarningIcon color="warning" />
-                          <Typography variant="h6" fontWeight={700} color="warning.dark">
-                            No Thermal Printers Detected
-                          </Typography>
-                        </Box>
-                        <Typography variant="body2" color="warning.dark" sx={{ mb: 2 }}>
-                          Make sure your thermal printer is:
-                        </Typography>
-                        <List dense>
-                          <ListItem sx={{ py: 0.5 }}>
-                            <Typography variant="body2">• Connected via USB or Serial port</Typography>
-                          </ListItem>
-                          <ListItem sx={{ py: 0.5 }}>
-                            <Typography variant="body2">• Powered on and ready</Typography>
-                          </ListItem>
-                          <ListItem sx={{ py: 0.5 }}>
-                            <Typography variant="body2">• Compatible with ESC/POS commands</Typography>
-                          </ListItem>
-                          <ListItem sx={{ py: 0.5 }}>
-                            <Typography variant="body2">• Python dependencies installed (run setup_python.bat)</Typography>
-                          </ListItem>
-                        </List>
-                      </Paper>
-                    )}
-                  </Stack>
-                )}
-
-                {section.id === 'notifications' && (
-                  <Stack spacing={3}>
-                    <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                      Notification Preferences
-                    </Typography>
-                    
-                    <List>
-                      <ListItem sx={{ px: 0 }}>
-                        <ListItemText
-                          primary="Low Stock Alerts"
-                          secondary="Get notified when product stock is running low"
-                        />
-                        <ListItemSecondaryAction>
-                          <Switch
-                            checked={notifications.lowStock}
-                            onChange={(e) => setNotifications({ ...notifications, lowStock: e.target.checked })}
-                            color="primary"
-                          />
-                        </ListItemSecondaryAction>
-                      </ListItem>
-                      
-                      <ListItem sx={{ px: 0 }}>
-                        <ListItemText
-                          primary="Daily Sales Report"
-                          secondary="Receive daily sales summaries"
-                        />
-                        <ListItemSecondaryAction>
-                          <Switch
-                            checked={notifications.dailyReport}
-                            onChange={(e) => setNotifications({ ...notifications, dailyReport: e.target.checked })}
-                            color="primary"
-                          />
-                        </ListItemSecondaryAction>
-                      </ListItem>
-                      
-                      <ListItem sx={{ px: 0 }}>
-                        <ListItemText
-                          primary="Backup Reminders"
-                          secondary="Get reminded to backup your data regularly"
-                        />
-                        <ListItemSecondaryAction>
-                          <Switch
-                            checked={notifications.backupReminder}
-                            onChange={(e) => setNotifications({ ...notifications, backupReminder: e.target.checked })}
-                            color="primary"
-                          />
-                        </ListItemSecondaryAction>
-                      </ListItem>
-                    </List>
-                  </Stack>
-                )}
-
-                {section.id === 'data' && (
-                  <Stack spacing={3}>
-                    <Typography variant="subtitle1" fontWeight={700} gutterBottom>
-                      Data Export & Import
-                    </Typography>
-                    
-                    <Grid container spacing={3}>
-                      <Grid item xs={12} md={6}>
-                        <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'success.200', bgcolor: 'success.50' }}>
-                          <CardContent sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                              <Avatar sx={{ bgcolor: 'success.main' }}>
-                                <ExportIcon />
-                              </Avatar>
-                              <Typography variant="h6" fontWeight={700}>
-                                Export Data
-                              </Typography>
-                            </Box>
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                              Download your sales data and create backups
-                            </Typography>
-                            <Stack spacing={2}>
-                              <Button
-                                variant="contained"
-                                color="success"
-                                startIcon={<ExportIcon />}
-                                onClick={handleExportSales}
-                                fullWidth
-                                sx={{ borderRadius: 3 }}
-                              >
-                                Export Sales (Excel)
-                              </Button>
-                              <Button
-                                variant="outlined"
-                                color="success"
-                                startIcon={<BackupIcon />}
-                                onClick={handleExportAllData}
-                                fullWidth
-                                sx={{ borderRadius: 3 }}
-                              >
-                                Full Backup (JSON)
-                              </Button>
-                            </Stack>
-                          </CardContent>
-                        </Card>
-                      </Grid>
-                      
-                      <Grid item xs={12} md={6}>
-                        <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'info.200', bgcolor: 'info.50' }}>
-                          <CardContent sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                              <Avatar sx={{ bgcolor: 'info.main' }}>
-                                <UploadIcon />
-                              </Avatar>
-                              <Typography variant="h6" fontWeight={700}>
-                                Import Data
-                              </Typography>
-                            </Box>
-                            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                              Restore data from previous backups
-                            </Typography>
-                            <Button
-                              variant="contained"
-                              color="info"
-                              startIcon={<UploadIcon />}
-                              onClick={() => setImportDialog(true)}
-                              fullWidth
-                              sx={{ borderRadius: 3 }}
-                            >
-                              Import Backup
-                            </Button>
-                          </CardContent>
-                        </Card>
-                      </Grid>
-                    </Grid>
-
-                    <Divider sx={{ my: 3 }} />
-
-                    <Box>
-                      <Typography variant="subtitle1" fontWeight={700} gutterBottom color="error">
-                        Danger Zone
-                      </Typography>
-                      <Card sx={{ borderRadius: 3, border: '1px solid', borderColor: 'error.200', bgcolor: 'error.50' }}>
-                        <CardContent sx={{ p: 3 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                            <Avatar sx={{ bgcolor: 'error.main' }}>
-                              <DeleteIcon />
-                            </Avatar>
-                            <Box>
-                              <Typography variant="h6" fontWeight={700} color="error">
-                                Clear All Data
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                This will permanently delete all sales, receipts, and settings
-                              </Typography>
-                            </Box>
-                          </Box>
-                          <Button
-                            variant="contained"
-                            color="error"
-                            startIcon={<DeleteIcon />}
-                            onClick={() => setClearDataDialog(true)}
-                            sx={{ borderRadius: 3 }}
-                          >
-                            Clear All Data
-                          </Button>
-                        </CardContent>
-                      </Card>
-                    </Box>
-                  </Stack>
-                )}
-              </AccordionDetails>
-            </Accordion>
-          </Card>
-        ))}
-      </Box>
-
-      {/* Add/Edit Category Dialog */}
-      <Dialog 
-        open={categoryDialog.open} 
-        onClose={() => setCategoryDialog({ open: false, mode: 'add' })}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 4,
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden',
-            bgcolor: 'background.paper'
-          }
-        }}
-      >
-        {/* Clean Header with Original Blue */}
-        <Box
-          sx={{
-            position: 'relative',
-            bgcolor: 'banner.main',
-            color: 'white',
-            p: 4,
-            overflow: 'hidden'
-          }}
-        >
-          {/* Subtle decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -20,
-              right: -20,
-              width: 100,
-              height: 100,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          <Box
-            sx={{
-              position: 'absolute',
-              bottom: -30,
-              left: -30,
-              width: 80,
-              height: 80,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.05)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.2)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.3)'
-              }}
-            >
-              {availableIcons.find(icon => icon.name === categoryForm.icon)?.icon || <CategoryIcon sx={{ fontSize: 32, color: 'white' }} />}
-            </Avatar>
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                {categoryDialog.mode === 'add' ? 'Add New Category' : 'Edit Category'}
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                {categoryDialog.mode === 'add' 
-                  ? 'Create a new product category for better organization'
-                  : 'Update category information and settings'
-                }
-              </Typography>
-            </Box>
-            <IconButton 
-              onClick={() => setCategoryDialog({ open: false, mode: 'add' })} 
-              sx={{ 
-                color: 'white',
-                bgcolor: 'rgba(255,255,255,0.15)',
-                '&:hover': { 
-                  bgcolor: 'rgba(255,255,255,0.25)'
-                }
-              }}
-            >
-              <CloseIcon />
-            </IconButton>
-          </Box>
-        </Box>
-
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Form */}
-            <Grid item xs={12} md={7}>
-              <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Category Information
-                </Typography>
-                
-                <Stack spacing={3}>
-                  {/* Category Name Field */}
-                  <TextField
-                    fullWidth
-                    label="Category Name"
-                    value={categoryForm.name}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })}
-                    placeholder="Enter category name"
-                    InputProps={{
-                      startAdornment: (
-                        <InputAdornment position="start">
-                          <CategoryIcon color="primary" />
-                        </InputAdornment>
-                      ),
-                    }}
-                    sx={{ 
-                      '& .MuiOutlinedInput-root': { 
-                        borderRadius: 3,
-                        '&:hover': {
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'primary.main',
-                          },
-                        },
-                      }
-                    }}
-                    autoFocus
-                  />
-                  
-                  {/* Description Field */}
-                  <TextField
-                    fullWidth
-                    label="Description (Optional)"
-                    value={categoryForm.description}
-                    onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })}
-                    placeholder="Describe what products belong to this category"
-                    multiline
-                    rows={3}
-                    sx={{ 
-                      '& .MuiOutlinedInput-root': { 
-                        borderRadius: 3,
-                        '&:hover': {
-                          '& .MuiOutlinedInput-notchedOutline': {
-                            borderColor: 'primary.main',
-                          },
-                        },
-                      }
-                    }}
-                  />
-                  
-                  {/* Icon Selection */}
-                  <Box>
-                    <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2, color: 'text.primary' }}>
-                      Category Icon
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                      Choose an icon that best represents this category
-                    </Typography>
-                    
-                    <Box sx={{ 
-                      maxHeight: 300, 
-                      overflowY: 'auto', 
-                      border: '1px solid', 
-                      borderColor: 'grey.300', 
-                      borderRadius: 2, 
-                      p: 2,
-                      bgcolor: 'grey.50'
-                    }}>
-                      <Grid container spacing={1.5}>
-                        {availableIcons.map((iconOption) => (
-                          <Grid item xs={4} sm={3} key={iconOption.name}>
-                            <Tooltip title={iconOption.label} placement="top">
-                              <Card
-                                sx={{
-                                  p: 1.5,
-                                  textAlign: 'center',
-                                  cursor: 'pointer',
-                                  borderRadius: 2,
-                                  border: '2px solid',
-                                  borderColor: categoryForm.icon === iconOption.name ? 'primary.main' : 'grey.300',
-                                  bgcolor: categoryForm.icon === iconOption.name ? 'primary.50' : 'white',
-                                  transition: 'all 0.2s',
-                                  '&:hover': {
-                                    borderColor: 'primary.light',
-                                    bgcolor: categoryForm.icon === iconOption.name ? 'primary.100' : 'grey.100',
-                                    transform: 'scale(1.05)',
-                                  }
-                                }}
-                                onClick={() => setCategoryForm({ ...categoryForm, icon: iconOption.name })}
-                              >
-                                <Avatar sx={{ 
-                                  bgcolor: categoryForm.icon === iconOption.name ? 'primary.main' : 'grey.600', 
-                                  width: 40, 
-                                  height: 40, 
-                                  mx: 'auto',
-                                  mb: 1,
-                                  color: 'white'
-                                }}>
-                                  {iconOption.icon}
-                                </Avatar>
-                                <Typography variant="caption" sx={{ 
-                                  fontSize: '0.7rem',
-                                  lineHeight: 1.2,
-                                  fontWeight: categoryForm.icon === iconOption.name ? 600 : 500,
-                                  color: categoryForm.icon === iconOption.name ? 'primary.main' : 'text.primary'
-                                }}>
-                                  {iconOption.label.split(' ')[0]}
-                                </Typography>
-                              </Card>
-                            </Tooltip>
-                          </Grid>
-                        ))}
-                      </Grid>
-                    </Box>
-                  </Box>
-                  
-                  {/* Tips Section */}
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'info.50', border: '1px solid', borderColor: 'info.200' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <Avatar sx={{ bgcolor: 'info.main', width: 24, height: 24 }}>
-                        <InfoIcon sx={{ fontSize: 14, color: 'white' }} />
-                      </Avatar>
-                      <Typography variant="subtitle2" fontWeight={700} color="info.main">
-                        Category Tips
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" color="info.dark">
-                      Categories help organize your products, making them easier to find and manage. You can filter products by category and generate category-specific reports.
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-
-            {/* Right side - Preview */}
-            <Grid item xs={12} md={5}>
-              <Stack spacing={3}>
-                {/* Category Preview Card */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Live Preview
-                  </Typography>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, p: 2, borderRadius: 2, bgcolor: 'grey.100' }}>
-                    <Avatar sx={{ bgcolor: 'primary.main', width: 48, height: 48 }}>
-                      {availableIcons.find(icon => icon.name === categoryForm.icon)?.icon || <CategoryIcon />}
-                    </Avatar>
-                    <Box>
-                      <Typography variant="subtitle1" fontWeight={600}>
-                        {categoryForm.name.trim() || 'Category Name'}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary">
-                        {categoryForm.description.trim() || 'No description provided'}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </Card>
-
-                {/* Statistics Card */}
-                <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                  <Typography variant="h6" fontWeight={700} sx={{ mb: 2, color: 'text.primary' }}>
-                    Quick Stats
-                  </Typography>
-                  <Grid container spacing={2}>
-                    <Grid item xs={6}>
-                      <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'success.50' }}>
-                        <Typography variant="h5" fontWeight={700} color="success.main">
-                          {productsContext.categories.length}
-                        </Typography>
-                        <Typography variant="caption" color="success.dark">
-                          Categories
-                        </Typography>
-                      </Box>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <Box sx={{ textAlign: 'center', p: 2, borderRadius: 2, bgcolor: 'info.50' }}>
-                        <Typography variant="h5" fontWeight={700} color="info.main">
-                          {productsContext.products.length}
-                        </Typography>
-                        <Typography variant="caption" color="info.dark">
-                          Products
-                        </Typography>
-                      </Box>
-                    </Grid>
-                  </Grid>
-                </Card>
-              </Stack>
-            </Grid>
-          </Grid>
-        </DialogContent>
-        
-        {/* Action Buttons */}
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setCategoryDialog({ open: false, mode: 'add' })}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
-            Cancel
-          </Button>
-          <Button 
-            variant="contained"
-            onClick={handleSaveCategory}
-            startIcon={<SaveIcon />}
-            disabled={!categoryForm.name.trim()}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              bgcolor: 'banner.main',
-              boxShadow: '0 4px 15px rgba(16, 24, 22, 0.4)',
-              '&:hover': {
-                bgcolor: 'banner.dark',
-                boxShadow: '0 6px 20px rgba(16, 24, 22, 0.6)',
-              },
-              '&:disabled': {
-                background: 'grey.300',
-                boxShadow: 'none'
-              }
-            }}
-            size="large"
-          >
-            {categoryDialog.mode === 'add' ? 'Create Category' : 'Save Changes'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Delete Category Dialog */}
-      <Dialog 
-        open={deleteDialog.open} 
-        onClose={() => setDeleteDialog({ open: false })}
-        maxWidth="sm"
-        fullWidth
-        PaperProps={{
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          }
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            background: '#b91c1c',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -20,
-              right: -20,
-              width: 80,
-              height: 80,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.2)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.3)'
-              }}
-            >
-              <DeleteForeverIcon sx={{ fontSize: 32, color: 'white' }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                Delete Category
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                This action cannot be undone
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-            <Typography variant="h6" fontWeight={600} sx={{ mb: 3, color: 'text.primary' }}>
-              Are you sure you want to delete this category?
-            </Typography>
-            
-            <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'error.50', border: '1px solid', borderColor: 'error.200', mb: 3 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Avatar sx={{ bgcolor: 'error.main', width: 24, height: 24 }}>
-                  <Typography variant="caption" fontWeight={700}>!</Typography>
-                </Avatar>
-                <Typography variant="subtitle2" fontWeight={700} color="error.main">
-                  Warning
-                </Typography>
+                    </>
+                  )}
+                </Box>
               </Box>
-              <Typography variant="body2" color="error.dark">
-                This action will permanently delete the category and cannot be undone.
-              </Typography>
-            </Box>
-            
-            <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <Avatar sx={{ bgcolor: 'warning.main', width: 24, height: 24 }}>
-                  <InfoIcon sx={{ fontSize: 16, color: 'white' }} />
-                </Avatar>
-                <Typography variant="subtitle2" fontWeight={700} color="warning.main">
-                  Important Note
+              <Box>
+                <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ display: 'block', mb: 1 }}>
+                  RECEIPT PREVIEW
                 </Typography>
+                <Box
+                  sx={{
+                    bgcolor: '#fff',
+                    color: '#111',
+                    fontFamily: '"Consolas", "Courier New", monospace',
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    p: 2,
+                    borderRadius: '4px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 14 }}>{storeForm.storeName || 'Store name'}</div>
+                  <div style={{ whiteSpace: 'pre-line' }}>{storeForm.storeAddress || 'Address'}</div>
+                  {storeForm.phoneNumber && <div>Tel: {storeForm.phoneNumber}</div>}
+                  {storeForm.birNumber && <div>BIR No: {storeForm.birNumber}</div>}
+                  <div style={{ margin: '8px 0', borderTop: '1px dashed #999' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Coke Mismo x2</span>
+                    <span>30.00</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700 }}>
+                    <span>TOTAL</span>
+                    <span>30.00</span>
+                  </div>
+                </Box>
               </Box>
-              <Typography variant="body2" color="warning.dark">
-                Categories with products cannot be deleted. Please remove or reassign products first.
-              </Typography>
-            </Box>
-          </Card>
-        </DialogContent>
-        
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setDeleteDialog({ open: false })}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
-            Cancel
-          </Button>
-          <Button 
-            variant="contained" 
-            color="error"
-            onClick={handleConfirmDelete}
-            startIcon={<DeleteForeverIcon />}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              background: '#b91c1c',
-              boxShadow: '0 4px 15px rgba(255, 107, 107, 0.4)',
-              '&:hover': {
-                background: '#991b1b',
-                boxShadow: '0 6px 20px rgba(255, 107, 107, 0.6)',
-              }
-            }}
-            size="large"
-          >
-            Delete Category
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Import Dialog */}
-      <Dialog 
-        open={importDialog} 
-        onClose={() => setImportDialog(false)}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          }
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            background: '#0369a1',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -30,
-              right: -30,
-              width: 100,
-              height: 100,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.2)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.3)'
-              }}
-            >
-              <UploadIcon sx={{ fontSize: 32, color: 'white' }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                Import Backup Data
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                Restore your data from a backup file
-              </Typography>
             </Box>
           </Box>
-        </Box>
+        );
 
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Instructions */}
-            <Grid item xs={12} md={8}>
-              <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Import Instructions
-                </Typography>
-                
-                <Stack spacing={3}>
-                  <Typography variant="body1" color="text.secondary">
-                    Select a backup file to restore your data. This will overwrite existing data with the backup contents.
-                  </Typography>
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'info.50', border: '1px solid', borderColor: 'info.200' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                      <Avatar sx={{ bgcolor: 'info.main', width: 24, height: 24 }}>
-                        <InfoIcon sx={{ fontSize: 16, color: 'white' }} />
-                      </Avatar>
-                      <Typography variant="subtitle2" fontWeight={700} color="info.main">
-                        Supported File Types
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" color="info.dark" sx={{ mb: 1 }}>
-                      • <strong>JSON (.json):</strong> Full backup files created by this application
-                    </Typography>
-                    <Typography variant="body2" color="info.dark">
-                      • Files must be valid backup files generated by the export function
-                    </Typography>
-                  </Box>
-                  
-                  <Box sx={{ p: 3, borderRadius: 2, bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                      <Avatar sx={{ bgcolor: 'warning.main', width: 24, height: 24 }}>
-                        <WarningIcon sx={{ fontSize: 16, color: 'white' }} />
-                      </Avatar>
-                      <Typography variant="subtitle2" fontWeight={700} color="warning.main">
-                        Important Warning
-                      </Typography>
-                    </Box>
-                    <Typography variant="body2" color="warning.dark">
-                      This action will replace your current data. Make sure to create a backup of your current data before proceeding.
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-
-            {/* Right side - File Selection */}
-            <Grid item xs={12} md={4}>
-              <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white', height: 'fit-content' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  Select File
-                </Typography>
-                
-                <Box sx={{ textAlign: 'center' }}>
-                  <Avatar sx={{ bgcolor: 'primary.50', width: 80, height: 80, mx: 'auto', mb: 2 }}>
-                    <UploadIcon sx={{ fontSize: 40, color: 'primary.main' }} />
-                  </Avatar>
-                  
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-                    Click the button below to select your backup file
-                  </Typography>
-                  
+      case 'categories':
+        return (
+          <Box>
+            <SectionHeader
+              title="Categories"
+              description={`${categories.length} categories. Renaming one moves its products along with it.`}
+              action={
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <input ref={categoryFileRef} type="file" accept=".csv" hidden onChange={importCategories} />
+                  <Tooltip title="Import categories from CSV">
+                    <IconButton aria-label="Import categories" onClick={() => categoryFileRef.current?.click()}>
+                      <ImportIcon />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Export categories as CSV">
+                    <IconButton aria-label="Export categories" onClick={exportCategories} disabled={categories.length === 0}>
+                      <ExportIcon />
+                    </IconButton>
+                  </Tooltip>
                   <Button
                     variant="contained"
-                    onClick={() => fileInputRef.current?.click()}
-                    startIcon={<UploadIcon />}
-                    sx={{ 
-                      borderRadius: 3,
-                      background: '#0369a1',
-                      boxShadow: '0 4px 15px rgba(79, 172, 254, 0.4)',
-                      '&:hover': {
-                        background: '#075985',
-                        boxShadow: '0 6px 20px rgba(79, 172, 254, 0.6)',
-                      }
+                    startIcon={<AddIcon />}
+                    onClick={() => {
+                      setCategoryDialog({ id: null, name: '', icon: 'CategoryIcon' });
+                      setCategoryError('');
                     }}
-                    fullWidth
-                    size="large"
                   >
-                    Choose Backup File
+                    Add category
                   </Button>
                 </Box>
-              </Card>
-            </Grid>
-          </Grid>
-          
-          <input
-            type="file"
-            accept=".json"
-            style={{ display: 'none' }}
-            ref={fileInputRef}
-            onChange={handleImportData}
-          />
-        </DialogContent>
-        
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setImportDialog(false)} 
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
               }
-            }}
-            size="large"
-          >
-            Cancel
-          </Button>
-        </DialogActions>
-      </Dialog>
+            />
+            {categories.length === 0 ? (
+              <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+                No categories yet. Add one, or type a new category name while adding a product.
+              </Typography>
+            ) : (
+              <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '12px', overflow: 'hidden' }}>
+                {[...categories]
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((c) => {
+                    const count = productCount.get(c.name) ?? 0;
+                    return (
+                      <Box
+                        key={c.id}
+                        sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1, '&:not(:last-of-type)': { borderBottom: 1, borderColor: 'divider' }, '&:hover': { bgcolor: 'action.hover' } }}
+                      >
+                        <Box
+                          sx={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: '9px',
+                            display: 'grid',
+                            placeItems: 'center',
+                            color: 'primary.main',
+                            bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+                            '& svg': { fontSize: 18 },
+                          }}
+                        >
+                          {iconByName(c.icon)}
+                        </Box>
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography fontWeight={600} noWrap>
+                            {c.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {count} product{count !== 1 ? 's' : ''}
+                          </Typography>
+                        </Box>
+                        <Tooltip title="Edit">
+                          <IconButton
+                            aria-label={`Edit ${c.name}`}
+                            onClick={() => {
+                              setCategoryDialog({ id: c.id, name: c.name, icon: c.icon || 'CategoryIcon' });
+                              setCategoryError('');
+                            }}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={count ? `Move its ${count} product${count !== 1 ? 's' : ''} first (Products › select › Move to category)` : 'Delete'}>
+                          <span>
+                            <IconButton aria-label={`Delete ${c.name}`} disabled={count > 0} onClick={() => deleteCategory(c.id)}>
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Box>
+                    );
+                  })}
+              </Box>
+            )}
+          </Box>
+        );
 
-      {/* Clear Data Confirmation Dialog */}
-      <Dialog 
-        open={clearDataDialog} 
-        onClose={() => setClearDataDialog(false)}
-        maxWidth="md"
-        fullWidth
-        PaperProps={{
-          sx: { 
-            borderRadius: 4, 
-            boxShadow: '0 20px 40px rgba(0,0,0,0.1)',
-            overflow: 'hidden'
-          }
-        }}
-      >
-        {/* Header with gradient background */}
-        <Box
-          sx={{
-            background: '#b91c1c',
-            color: 'white',
-            p: 4,
-            position: 'relative',
-            overflow: 'hidden'
-          }}
-        >
-          {/* Decorative elements */}
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -40,
-              right: -40,
-              width: 120,
-              height: 120,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.1)',
-            }}
-          />
-          <Box
-            sx={{
-              position: 'absolute',
-              bottom: -20,
-              left: -20,
-              width: 60,
-              height: 60,
-              borderRadius: '50%',
-              background: 'rgba(255,255,255,0.15)',
-            }}
-          />
-          
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 3, position: 'relative', zIndex: 1 }}>
-            <Avatar 
-              sx={{ 
-                bgcolor: 'rgba(255,255,255,0.2)', 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                border: '2px solid rgba(255,255,255,0.3)'
-              }}
-            >
-              <DeleteIcon sx={{ fontSize: 32, color: 'white' }} />
-            </Avatar>
-            <Box>
-              <Typography variant="h4" fontWeight={800} sx={{ mb: 1 }}>
-                Confirm Data Deletion
-              </Typography>
-              <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                This will permanently delete all your data
-              </Typography>
+      case 'printer':
+        return (
+          <Box>
+            <SectionHeader
+              title="Receipt printer"
+              description="The thermal printer used for receipts and the cash drawer."
+              action={
+                <Button startIcon={<RefreshIcon />} onClick={() => refreshPrinters()} disabled={isLoading}>
+                  {isLoading ? 'Scanning…' : 'Scan for printers'}
+                </Button>
+              }
+            />
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'center', mb: 2 }}>
+              <TextField
+                select
+                label="Printer"
+                value={selectedPrinter || ''}
+                onChange={(e) => setSelectedPrinter(e.target.value || null)}
+                sx={{ minWidth: 280, flex: 1 }}
+                helperText={`${printers.length} printer${printers.length !== 1 ? 's' : ''} found`}
+              >
+                <MenuItem value="">
+                  <em>None</em>
+                </MenuItem>
+                {printers.map((p) => (
+                  <MenuItem key={p.name} value={p.name}>
+                    {p.name}
+                    <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                      {p.connection} · {p.manufacturer}
+                      {p.isDefault ? ' · default' : ''}
+                    </Typography>
+                  </MenuItem>
+                ))}
+              </TextField>
+              <Button
+                variant="outlined"
+                startIcon={<PrintIcon />}
+                disabled={!selectedPrinter || isLoading}
+                onClick={async () => {
+                  const ok = await testPrint();
+                  notify(ok ? 'Test receipt printed' : 'The test print failed. Check the printer is on and connected.', ok ? 'success' : 'error');
+                }}
+                sx={{ mb: 2.5 }}
+              >
+                Test print
+              </Button>
+            </Box>
+            {selectedPrinter ? (
+              <Chip icon={<CheckIcon />} color="success" variant="outlined" label={`Using ${selectedPrinter}`} />
+            ) : (
+              <Panel title={printers.length ? 'Pick a printer above' : 'No printer found'}>
+                <Typography variant="body2" color="text.secondary" component="div">
+                  Check that the printer is:
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+                    <li>connected by USB and switched on</li>
+                    <li>an ESC/POS thermal printer (e.g. XP-58)</li>
+                    <li>set up with the Python helper (run setup_python.bat once)</li>
+                  </ul>
+                  Then press Scan for printers.
+                </Typography>
+              </Panel>
+            )}
+          </Box>
+        );
+
+      case 'appearance':
+        return (
+          <Box>
+            <SectionHeader title="Appearance" description="Applies right away. The sun/moon button in the top bar switches too." />
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2, maxWidth: 560 }}>
+              {(
+                [
+                  ['light', 'Light', LightIcon, '#f4f5f2', '#ffffff', '#0f766e'],
+                  ['dark', 'Dark', DarkIcon, '#0c1211', '#141b1a', '#2dd4bf'],
+                ] as const
+              ).map(([value, label, Icon, page, card, accent]) => {
+                const active = themeName === value;
+                return (
+                  <Box
+                    key={value}
+                    component="button"
+                    type="button"
+                    onClick={() => setThemeName(value)}
+                    aria-pressed={active}
+                    sx={{
+                      textAlign: 'left',
+                      font: 'inherit',
+                      color: 'text.primary',
+                      cursor: 'pointer',
+                      p: 1.5,
+                      borderRadius: '12px',
+                      bgcolor: 'background.paper',
+                      border: 2,
+                      borderColor: active ? 'primary.main' : 'divider',
+                      '&:focus-visible': { outline: 2, outlineStyle: 'solid', outlineColor: 'primary.main' },
+                    }}
+                  >
+                    <Box sx={{ height: 90, borderRadius: '8px', bgcolor: page, p: 1, display: 'grid', gridTemplateColumns: '28px 1fr', gap: 0.75, mb: 1.25 }}>
+                      <Box sx={{ bgcolor: card, borderRadius: '4px' }} />
+                      <Box sx={{ display: 'grid', gap: 0.75, gridTemplateRows: '14px 1fr' }}>
+                        <Box sx={{ bgcolor: accent, borderRadius: '4px', width: '40%' }} />
+                        <Box sx={{ bgcolor: card, borderRadius: '4px' }} />
+                      </Box>
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Icon fontSize="small" />
+                      <Typography fontWeight={600} sx={{ flex: 1 }}>
+                        {label}
+                      </Typography>
+                      {active && <CheckIcon color="primary" fontSize="small" />}
+                    </Box>
+                  </Box>
+                );
+              })}
             </Box>
           </Box>
-        </Box>
+        );
 
-        <DialogContent sx={{ p: 4, bgcolor: 'grey.50' }}>
-          <Grid container spacing={4}>
-            {/* Left side - Warning */}
-            <Grid item xs={12} md={8}>
-              <Card sx={{ p: 4, borderRadius: 3, boxShadow: 2, bgcolor: 'white' }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 3, color: 'text.primary' }}>
-                  What will be deleted?
-                </Typography>
-                
-                <Typography variant="body1" sx={{ mb: 3, color: 'text.secondary' }}>
-                  This action will permanently delete the following data:
-                </Typography>
-                
-                <List sx={{ bgcolor: 'grey.50', borderRadius: 2, p: 2 }}>
-                  <ListItem sx={{ py: 1 }}>
-                    <Avatar sx={{ bgcolor: 'error.main', width: 32, height: 32, mr: 2 }}>
-                      <AssessmentIcon sx={{ fontSize: 18 }} />
-                    </Avatar>
-                    <ListItemText 
-                      primary="All sales records" 
-                      secondary="Complete transaction history"
-                      primaryTypographyProps={{ fontWeight: 600 }}
-                    />
-                  </ListItem>
-                  <ListItem sx={{ py: 1 }}>
-                    <Avatar sx={{ bgcolor: 'error.main', width: 32, height: 32, mr: 2 }}>
-                      <ReceiptIcon sx={{ fontSize: 18 }} />
-                    </Avatar>
-                    <ListItemText 
-                      primary="All receipt records" 
-                      secondary="Printed and stored receipts"
-                      primaryTypographyProps={{ fontWeight: 600 }}
-                    />
-                  </ListItem>
-                  <ListItem sx={{ py: 1 }}>
-                    <Avatar sx={{ bgcolor: 'error.main', width: 32, height: 32, mr: 2 }}>
-                      <BusinessIcon sx={{ fontSize: 18 }} />
-                    </Avatar>
-                    <ListItemText 
-                      primary="Store settings" 
-                      secondary="Business information and preferences"
-                      primaryTypographyProps={{ fontWeight: 600 }}
-                    />
-                  </ListItem>
-                  <ListItem sx={{ py: 1 }}>
-                    <Avatar sx={{ bgcolor: 'error.main', width: 32, height: 32, mr: 2 }}>
-                      <SettingsIcon sx={{ fontSize: 18 }} />
-                    </Avatar>
-                    <ListItemText 
-                      primary="All other application data" 
-                      secondary="Categories, products, and configurations"
-                      primaryTypographyProps={{ fontWeight: 600 }}
-                    />
-                  </ListItem>
-                </List>
-              </Card>
-            </Grid>
+      case 'inventory':
+        return (
+          <Box>
+            <SectionHeader title="Inventory" description="How Products flags items that are running out." />
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, alignItems: 'flex-start' }}>
+              <TextField
+                label="Low-stock level"
+                type="number"
+                value={lowStock}
+                onChange={(e) => setLowStock(e.target.value)}
+                inputProps={{ min: 0, step: 1 }}
+                helperText={`A product with this many or fewer left shows as Low stock. Default ${DEFAULT_LOW_STOCK}.`}
+                sx={{ width: 340 }}
+              />
+              <Button
+                variant="contained"
+                disabled={!/^\d+$/.test(lowStock) || Number(lowStock) === getLowStockThreshold()}
+                onClick={() => {
+                  setLowStockThreshold(Number(lowStock));
+                  notify(`Low stock now means ${lowStock} or fewer`, 'success');
+                }}
+                sx={{ mt: 1 }}
+              >
+                Save
+              </Button>
+            </Box>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              Right now {products.filter((p) => p.quantity > 0 && p.quantity <= (Number(lowStock) || 0)).length} products would be low on stock and{' '}
+              {products.filter((p) => p.quantity <= 0).length} are out.
+            </Typography>
+          </Box>
+        );
 
-            {/* Right side - Final Warning */}
-            <Grid item xs={12} md={4}>
-              <Card sx={{ p: 3, borderRadius: 3, boxShadow: 2, bgcolor: 'white', height: 'fit-content' }}>
-                <Box sx={{ textAlign: 'center' }}>
-                  <Avatar sx={{ bgcolor: 'error.50', width: 80, height: 80, mx: 'auto', mb: 2 }}>
-                    <WarningIcon sx={{ fontSize: 40, color: 'error.main' }} />
-                  </Avatar>
-                  
-                  <Typography variant="h6" fontWeight={700} color="error.main" sx={{ mb: 2 }}>
-                    Final Warning
-                  </Typography>
-                  
-                  <Typography variant="body2" color="error.dark" sx={{ mb: 3 }}>
-                    This action cannot be undone! Make sure you have a backup if you need to recover this data later.
-                  </Typography>
-                  
-                  <Box sx={{ p: 2, borderRadius: 2, bgcolor: 'error.50', border: '1px solid', borderColor: 'error.200' }}>
-                    <Typography variant="body2" color="error.dark" fontWeight={700}>
-                      ⚠️ IRREVERSIBLE ACTION
+      case 'account':
+        return (
+          <Box component="form" onSubmit={saveAccount} noValidate sx={{ maxWidth: 440 }}>
+            <SectionHeader title="Account & security" description="The name and password used on the login screen." />
+            {!hasCustomLogin() && (
+              <Panel title="You’re using the default login">
+                <Typography variant="body2" color="text.secondary">
+                  Anyone who reads the login screen knows it. Set your own password below; the hint disappears from the login screen once you do.
+                </Typography>
+              </Panel>
+            )}
+            <Box sx={{ display: 'grid', gap: 2 }}>
+              <TextField
+                label="Current password"
+                type={showPasswords ? 'text' : 'password'}
+                value={account.current}
+                onChange={(e) => setAccount({ ...account, current: e.target.value })}
+                error={Boolean(accountErrors.current)}
+                helperText={accountErrors.current || 'Needed to make any change'}
+                autoComplete="current-password"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton aria-label={showPasswords ? 'Hide passwords' : 'Show passwords'} onClick={() => setShowPasswords((v) => !v)} edge="end">
+                        {showPasswords ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+              />
+              <TextField
+                label="Username"
+                value={account.username}
+                onChange={(e) => setAccount({ ...account, username: e.target.value })}
+                error={Boolean(accountErrors.username)}
+                helperText={accountErrors.username || ' '}
+                autoComplete="username"
+              />
+              <TextField
+                label="New password"
+                type={showPasswords ? 'text' : 'password'}
+                value={account.password}
+                onChange={(e) => setAccount({ ...account, password: e.target.value })}
+                error={Boolean(accountErrors.password)}
+                helperText={accountErrors.password || 'Leave empty to keep the current password'}
+                autoComplete="new-password"
+              />
+              <TextField
+                label="Repeat new password"
+                type={showPasswords ? 'text' : 'password'}
+                value={account.confirm}
+                onChange={(e) => setAccount({ ...account, confirm: e.target.value })}
+                error={Boolean(accountErrors.confirm)}
+                helperText={accountErrors.confirm || ' '}
+                autoComplete="new-password"
+              />
+              <Box>
+                <Button type="submit" variant="contained" disabled={!account.current}>
+                  Update login
+                </Button>
+              </Box>
+            </Box>
+          </Box>
+        );
+
+      case 'data':
+        return (
+          <Box>
+            <SectionHeader title="Backup & data" description="Keep a copy of everything on a USB drive or in the cloud." />
+            <Panel title="Full backup">
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
+                {backupStale ? <WarningIcon color="warning" /> : <CheckIcon color="success" />}
+                <Typography variant="body2" sx={{ flex: 1, minWidth: 220 }}>
+                  {lastBackup ? (
+                    <>
+                      Last backup <strong>{backupAge === 0 ? 'today' : `${backupAge} day${backupAge !== 1 ? 's' : ''} ago`}</strong> ({lastBackup.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })})
+                      {backupStale ? '. Time for a new one.' : '.'}
+                    </>
+                  ) : (
+                    <>
+                      <strong>No backup made on this computer yet.</strong> If it breaks, your sales and products are gone.
+                    </>
+                  )}
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Includes {BACKUP_ITEMS.map((i) => i.label.toLowerCase()).join(', ')}. The login password and printer choice stay on this computer.
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                <input ref={backupFileRef} type="file" accept=".json" hidden onChange={chooseRestoreFile} />
+                <Button variant="contained" startIcon={<ExportIcon />} onClick={downloadBackup}>
+                  Download backup
+                </Button>
+                <Button variant="outlined" startIcon={<ImportIcon />} onClick={() => backupFileRef.current?.click()}>
+                  Restore from backup…
+                </Button>
+              </Box>
+            </Panel>
+            <Panel title="Sales report">
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                An Excel report of the current sales. Unlike Sales Record’s Export, this doesn’t add anything to Gross Sales.
+              </Typography>
+              <Button variant="outlined" startIcon={<ReportIcon />} onClick={handleExportSales} disabled={salesContext.sales.length === 0}>
+                Download Excel report
+              </Button>
+            </Panel>
+            <Panel title="Erase all data" tone="error">
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Deletes products, categories, sales, receipts, gross sales, customer credit, staff and attendance from this computer. Store details, theme and login stay.
+              </Typography>
+              <Button
+                color="error"
+                variant="outlined"
+                startIcon={<DeleteIcon />}
+                onClick={() => {
+                  setEraseText('');
+                  setEraseOpen(true);
+                }}
+              >
+                Erase all data…
+              </Button>
+            </Panel>
+          </Box>
+        );
+    }
+  })();
+
+  return (
+    <Box>
+      <Box sx={{ mb: 2 }}>
+        <Typography variant="h5">Settings</Typography>
+        <Typography variant="body2" color="text.secondary">
+          {current.hint}
+        </Typography>
+      </Box>
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: '240px minmax(0, 1fr)' }, gap: 2, alignItems: 'start' }}>
+        {/* Section menu: a column on wide screens, a scrolling row on phones */}
+        <Card component="nav" aria-label="Settings sections" sx={{ p: 1, position: { md: 'sticky' }, top: { md: 84 }, display: 'flex', flexDirection: { xs: 'row', md: 'column' }, gap: 0.5, overflowX: 'auto' }}>
+          {SECTIONS.map(({ id, label, Icon }) => {
+            const active = section === id;
+            const flag = (id === 'data' && backupStale) || (id === 'account' && !hasCustomLogin());
+            return (
+              <Box
+                key={id}
+                component="button"
+                type="button"
+                onClick={() => setSection(id)}
+                aria-current={active ? 'page' : undefined}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.25,
+                  flexShrink: 0,
+                  px: 1.5,
+                  py: 1,
+                  border: 0,
+                  borderRadius: '10px',
+                  font: 'inherit',
+                  fontSize: '0.9375rem',
+                  fontWeight: active ? 700 : 500,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  color: active ? 'primary.main' : 'text.secondary',
+                  bgcolor: active ? (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.14 : 0.09) : 'transparent',
+                  '&:hover': { color: 'text.primary', bgcolor: active ? undefined : 'action.hover' },
+                  '&:focus-visible': { outline: 2, outlineStyle: 'solid', outlineColor: 'primary.main' },
+                }}
+              >
+                <Icon fontSize="small" />
+                <span style={{ flex: 1 }}>{label}</span>
+                {flag && <Box component="span" aria-label="needs attention" sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'warning.main' }} />}
+              </Box>
+            );
+          })}
+        </Card>
+
+        <Card sx={{ p: { xs: 2, sm: 3 }, minWidth: 0 }}>{body}</Card>
+      </Box>
+
+      {/* Category editor */}
+      <Dialog open={categoryDialog !== null} onClose={() => setCategoryDialog(null)} maxWidth="sm" fullWidth>
+        {categoryDialog && (
+          <Box component="form" onSubmit={saveCategory} noValidate>
+            <DialogTitle>{categoryDialog.id ? 'Edit category' : 'Add category'}</DialogTitle>
+            <DialogContent sx={{ pt: '8px !important' }}>
+              <TextField
+                autoFocus
+                fullWidth
+                label="Name"
+                value={categoryDialog.name}
+                onChange={(e) => {
+                  setCategoryDialog({ ...categoryDialog, name: e.target.value });
+                  setCategoryError('');
+                }}
+                error={Boolean(categoryError)}
+                helperText={
+                  categoryError ||
+                  (categoryDialog.id && (productCount.get(categories.find((c) => c.id === categoryDialog.id)?.name ?? '') ?? 0) > 0
+                    ? 'Its products will move to the new name'
+                    : ' ')
+                }
+                sx={{ mb: 1 }}
+              />
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Icon
+              </Typography>
+              <Box role="radiogroup" aria-label="Category icon" sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(44px, 1fr))', gap: 0.75 }}>
+                {CATEGORY_ICONS.map(({ name, label, Icon }) => {
+                  const picked = categoryDialog.icon === name;
+                  return (
+                    <Tooltip key={name} title={label}>
+                      <Box
+                        component="button"
+                        type="button"
+                        role="radio"
+                        aria-checked={picked}
+                        aria-label={label}
+                        onClick={() => setCategoryDialog({ ...categoryDialog, icon: name })}
+                        sx={{
+                          height: 44,
+                          display: 'grid',
+                          placeItems: 'center',
+                          borderRadius: '10px',
+                          border: 2,
+                          cursor: 'pointer',
+                          borderColor: picked ? 'primary.main' : 'transparent',
+                          color: picked ? 'primary.main' : 'text.secondary',
+                          bgcolor: picked ? (t) => alpha(t.palette.primary.main, 0.1) : 'action.hover',
+                          '&:focus-visible': { outline: 2, outlineStyle: 'solid', outlineColor: 'primary.main' },
+                        }}
+                      >
+                        <Icon />
+                      </Box>
+                    </Tooltip>
+                  );
+                })}
+              </Box>
+            </DialogContent>
+            <DialogActions sx={{ px: 3, pb: 2.5 }}>
+              <Button color="inherit" onClick={() => setCategoryDialog(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="contained">
+                Save
+              </Button>
+            </DialogActions>
+          </Box>
+        )}
+      </Dialog>
+
+      {/* Restore preview */}
+      <Dialog open={restore !== null} onClose={() => setRestore(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Restore {restore?.fileName}?</DialogTitle>
+        <DialogContent>
+          {restore && (
+            <>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {restore.exportedAt ? `Made ${new Date(restore.exportedAt).toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' })}. ` : ''}
+                {restore.legacy ? 'An older backup: it only holds sales, receipts and store details. ' : ''}
+                These replace what’s on this computer now:
+              </Typography>
+              <Box sx={{ border: 1, borderColor: 'divider', borderRadius: '10px', mb: 2 }}>
+                {BACKUP_ITEMS.filter((i) => restore.data[i.key] !== undefined).map((i) => (
+                  <Box key={i.key} sx={{ display: 'flex', justifyContent: 'space-between', px: 1.5, py: 0.75, '&:not(:last-of-type)': { borderBottom: 1, borderColor: 'divider' } }}>
+                    <Typography variant="body2">{i.label}</Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {describeValue(restore.data[i.key])}
                     </Typography>
                   </Box>
-                </Box>
-              </Card>
-            </Grid>
-          </Grid>
+                ))}
+              </Box>
+              <Typography variant="body2">
+                Anything not listed stays as it is. <strong>Download a backup of the current data first</strong> if you might need it. The app restarts after restoring.
+              </Typography>
+            </>
+          )}
         </DialogContent>
-        
-        <DialogActions sx={{ p: 4, bgcolor: 'white', borderTop: '1px solid', borderColor: 'divider' }}>
-          <Button 
-            onClick={() => setClearDataDialog(false)} 
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              color: 'text.secondary',
-              '&:hover': {
-                bgcolor: 'grey.100'
-              }
-            }}
-            size="large"
-          >
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button color="inherit" onClick={() => setRestore(null)} sx={{ mr: 'auto' }}>
             Cancel
           </Button>
-          <Button 
-            variant="contained" 
-            color="error"
-            onClick={handleClearAllData}
-            sx={{ 
-              borderRadius: 3, 
-              px: 4, 
-              py: 1.5,
-              background: '#b91c1c',
-              boxShadow: '0 4px 15px rgba(255, 107, 107, 0.4)',
-              '&:hover': {
-                background: '#991b1b',
-                boxShadow: '0 6px 20px rgba(255, 107, 107, 0.6)',
-              }
-            }}
-            size="large"
-          >
-            Delete All Data
+          <Button variant="outlined" startIcon={<ExportIcon />} onClick={downloadBackup}>
+            Back up current data
+          </Button>
+          <Button variant="contained" color="error" onClick={applyRestore}>
+            Restore
           </Button>
         </DialogActions>
       </Dialog>
 
+      {/* Erase all */}
+      <Dialog open={eraseOpen} onClose={() => setEraseOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Erase all data?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            This can’t be undone. {lastBackup ? `Your last backup is from ${lastBackup.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}.` : 'You haven’t made a backup yet.'} Type <strong>ERASE</strong> to confirm.
+          </Typography>
+          <TextField fullWidth autoFocus value={eraseText} onChange={(e) => setEraseText(e.target.value)} placeholder="ERASE" inputProps={{ 'aria-label': 'Type ERASE to confirm' }} />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2.5, gap: 1 }}>
+          <Button color="inherit" onClick={() => setEraseOpen(false)} sx={{ mr: 'auto' }}>
+            Cancel
+          </Button>
+          <Button variant="outlined" onClick={downloadBackup}>
+            Back up first
+          </Button>
+          <Button variant="contained" color="error" disabled={eraseText.trim() !== 'ERASE'} onClick={eraseAll}>
+            Erase
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
 
-export default Settings; 
+export default Settings;

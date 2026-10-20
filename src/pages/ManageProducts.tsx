@@ -45,8 +45,8 @@ import { Product, ProductsContext, StoreSettingsContext } from '../App';
 import { useNotify } from '../contexts/NotificationContext';
 import { buildPriceListPages, PriceListCategoryGroup, PriceListPrintContent } from '../components/PriceList';
 import { categoryIcon } from '../utils/categoryIcons';
+import { getLowStockThreshold } from '../utils/preferences';
 
-const LOW_STOCK = 5;
 const PAGE_SIZE = 80;
 const UNCATEGORIZED = '__uncategorized__';
 
@@ -91,7 +91,7 @@ const parseCsv = (text: string): string[][] => {
   return rows.filter((r) => r.some((cell) => cell.trim() !== ''));
 };
 
-const stockState = (quantity: number) => (quantity <= 0 ? 'out' : quantity <= LOW_STOCK ? 'low' : 'ok');
+const stockState = (quantity: number, lowStock: number) => (quantity <= 0 ? 'out' : quantity <= lowStock ? 'low' : 'ok');
 
 // ---------- list row ----------
 
@@ -181,6 +181,7 @@ const RowRoot = styled('div')(({ theme }) => ({
 
 type RowProps = {
   product: Product;
+  lowStock: number;
   icon: React.ReactElement;
   selected: boolean;
   editingPrice: boolean;
@@ -195,6 +196,7 @@ type RowProps = {
 
 const ProductRow = React.memo(function ProductRow({
   product,
+  lowStock,
   icon,
   selected,
   editingPrice,
@@ -206,7 +208,7 @@ const ProductRow = React.memo(function ProductRow({
   onDuplicate,
   onDelete,
 }: RowProps) {
-  const state = stockState(product.quantity);
+  const state = stockState(product.quantity, lowStock);
   const barcodes = product.barcodes.filter(Boolean);
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   // Blur is the one place a price is saved; Escape marks the edit as cancelled first
@@ -365,6 +367,8 @@ const ManageProducts: React.FC = () => {
   const { products, categories, addProduct, updateProduct, deleteProduct, addCategory, deleteCategory, exportProducts, importProducts } = useContext(ProductsContext);
   const storeSettings = useContext(StoreSettingsContext);
   const notify = useNotify();
+  // Set in Settings › Inventory
+  const [lowStock] = useState(getLowStockThreshold);
 
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
@@ -420,13 +424,13 @@ const ManageProducts: React.FC = () => {
     let noBarcode = 0;
     for (const p of products) {
       value += p.price * Math.max(0, p.quantity);
-      const state = stockState(p.quantity);
+      const state = stockState(p.quantity, lowStock);
       if (state === 'low') low += 1;
       if (state === 'out') out += 1;
       if (!p.barcodes.some((b) => b.trim())) noBarcode += 1;
     }
     return { value, low, out, noBarcode };
-  }, [products]);
+  }, [lowStock, products]);
 
   const deferredSearch = useDeferredValue(search);
   const query = deferredSearch.trim().toLowerCase();
@@ -434,7 +438,7 @@ const ManageProducts: React.FC = () => {
   const visibleProducts = useMemo(() => {
     const list = products.filter((p) => {
       if (categoryFilter !== 'all' && (p.category || UNCATEGORIZED) !== categoryFilter) return false;
-      const state = stockState(p.quantity);
+      const state = stockState(p.quantity, lowStock);
       if (stockFilter === 'low' && state !== 'low') return false;
       if (stockFilter === 'out' && state !== 'out') return false;
       if (stockFilter === 'nobarcode' && p.barcodes.some((b) => b.trim())) return false;
@@ -451,7 +455,7 @@ const ManageProducts: React.FC = () => {
       recent: (a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }),
     };
     return list.sort(sorters[sort]);
-  }, [categoryFilter, products, query, sort, stockFilter]);
+  }, [categoryFilter, lowStock, products, query, sort, stockFilter]);
 
   useEffect(() => setVisibleCount(PAGE_SIZE), [categoryFilter, query, sort, stockFilter]);
 
@@ -908,7 +912,7 @@ const ManageProducts: React.FC = () => {
           icon={<LowIcon />}
           label="Low stock"
           value={String(stats.low)}
-          caption={`${LOW_STOCK} or fewer left · tap to show`}
+          caption={`${lowStock} or fewer left · tap to show`}
           tone="warning"
           active={stockFilter === 'low'}
           onClick={() => setStockFilter(stockFilter === 'low' ? 'all' : 'low')}
@@ -1112,6 +1116,7 @@ const ManageProducts: React.FC = () => {
               <ProductRow
                 key={product.id}
                 product={product}
+                lowStock={lowStock}
                 icon={iconFor(product.category)}
                 selected={selected.has(product.id)}
                 editingPrice={priceEditing === product.id}
@@ -1206,7 +1211,7 @@ const ManageProducts: React.FC = () => {
                   type="number"
                   value={draft.quantity}
                   onChange={(e) => setDraft({ ...draft, quantity: e.target.value })}
-                  helperText={draft.quantity !== '' && Number(draft.quantity) <= LOW_STOCK ? (Number(draft.quantity) <= 0 ? 'Out of stock' : 'Low stock') : ' '}
+                  helperText={draft.quantity !== '' && Number(draft.quantity) <= lowStock ? (Number(draft.quantity) <= 0 ? 'Out of stock' : 'Low stock') : ' '}
                   inputProps={{ min: 0, step: 1, inputMode: 'numeric' }}
                 />
               </Box>

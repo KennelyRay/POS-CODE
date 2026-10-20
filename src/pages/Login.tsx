@@ -25,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useNotify } from '../contexts/NotificationContext';
+import { DEFAULT_PASSWORD, DEFAULT_USERNAME, getLoginPassword, getLoginUsername, hasCustomLogin } from '../utils/preferences';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
@@ -40,8 +41,8 @@ const Login: React.FC = () => {
     setLoading(true);
 
     // Get stored credentials or fallback to default
-    const storedUsername = localStorage.getItem('pos_username') || 'Admin';
-    const storedPassword = localStorage.getItem('pos_password') || '000000';
+    const storedUsername = getLoginUsername();
+    const storedPassword = getLoginPassword();
 
     setTimeout(() => {
       if (username === storedUsername && password === storedPassword) {
@@ -206,6 +207,8 @@ const Login: React.FC = () => {
                   {loading ? 'Signing in…' : 'Sign in'}
                 </Button>
 
+                {/* Only while the default account is still in use */}
+                {!hasCustomLogin() && (
                 <Box
                   sx={{
                     display: 'flex',
@@ -220,9 +223,10 @@ const Login: React.FC = () => {
                 >
                   <AdminIcon fontSize="small" />
                   <Typography variant="body2">
-                    Default login: <strong>Admin</strong> / <strong>000000</strong>
+                    Default login: <strong>{DEFAULT_USERNAME}</strong> / <strong>{DEFAULT_PASSWORD}</strong> · change it in Settings
                   </Typography>
                 </Box>
+                )}
               </Stack>
             </form>
           </Box>
