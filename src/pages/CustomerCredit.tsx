@@ -155,7 +155,7 @@ const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: strin
         height: 40,
         flexShrink: 0,
         borderRadius: '10px',
-        display: 'grid',
+        display: { xs: 'none', sm: 'grid' },
         placeItems: 'center',
         color: tone === 'default' ? 'primary.main' : `${tone}.main`,
         bgcolor: (t) => alpha(tone === 'default' ? t.palette.primary.main : t.palette[tone].main, t.palette.mode === 'dark' ? 0.16 : 0.1),
@@ -167,10 +167,10 @@ const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: strin
       <Typography variant="body2" color="text.secondary" fontWeight={600}>
         {label}
       </Typography>
-      <Typography variant="h5" component="p" color={tone === 'error' ? 'error.main' : 'text.primary'} sx={{ lineHeight: 1.3 }} noWrap>
+      <Typography variant="h5" component="p" color={tone === 'error' ? 'error.main' : 'text.primary'} sx={{ lineHeight: 1.3, fontSize: { xs: '1.125rem', sm: '1.375rem' }, overflowWrap: 'anywhere' }}>
         {value}
       </Typography>
-      <Typography variant="caption" color="text.secondary" component="p" noWrap title={caption}>
+      <Typography variant="caption" color="text.secondary" component="p" sx={{ lineHeight: 1.4 }}>
         {caption}
       </Typography>
     </Box>

@@ -1,1761 +1,1366 @@
-import React, { useMemo, useState, useContext } from 'react';
+import React, { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
-  Typography,
+  Button,
   Card,
-  CardContent,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  IconButton,
+  InputAdornment,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Dialog,
-  Button,
-  TextField,
-  Alert,
-  Grid,
-  Chip,
-  Avatar,
-  Divider,
-  IconButton,
   Tabs,
-  Tab,
-  Paper,
-  Stack,
-  LinearProgress,
-  Fade,
-  Grow,
-  Slide,
+  TextField,
   Tooltip,
+  Typography,
 } from '@mui/material';
+import { alpha, useTheme } from '@mui/material/styles';
 import {
-  TrendingUp as TrendingUpIcon,
-  Assessment as AssessmentIcon,
-  CalendarToday as CalendarIcon,
+  ArrowDownward as DownIcon,
+  ArrowUpward as UpIcon,
+  CalendarMonth as CalendarIcon,
+  ChevronLeft as PrevIcon,
+  ChevronRight as NextIcon,
+  DeleteOutline as DeleteIcon,
+  EditOutlined as EditIcon,
+  EmojiEvents as BestIcon,
+  FileDownloadOutlined as ExportIcon,
+  InsightsOutlined as InsightsIcon,
   Lock as LockIcon,
+  PercentOutlined as MarginIcon,
+  PointOfSale as GrossIcon,
+  Speed as PaceIcon,
+  TrendingDown as TrendDownIcon,
+  TrendingUp as TrendUpIcon,
   Visibility as VisibilityIcon,
   VisibilityOff as VisibilityOffIcon,
-  DateRange as DateRangeIcon,
-  Today as TodayIcon,
-  TrendingDown as TrendingDownIcon,
-  ShowChart as ShowChartIcon,
-  AccountBalance as AccountBalanceIcon,
-  Close as CloseIcon,
-  Edit as EditIcon,
-  Save as SaveIcon,
-  Cancel as CancelIcon,
+  EventBusy as QuietIcon,
 } from '@mui/icons-material';
-import { GrossSalesContext, DailySalesRecord, GrossSalesRecord } from '../App';
-import { useTheme } from '@mui/material/styles';
+import { saveAs } from 'file-saver';
+import { DailySalesRecord, GrossSalesContext, GrossSalesRecord } from '../App';
+import { useNotify } from '../contexts/NotificationContext';
 
 const GROSS_SALES_PASSWORD = 'Anapen73';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const WEEKDAYS_LONG = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
 
-interface TabPanelProps {
-  children?: React.ReactNode;
-  index: number;
-  value: number;
-}
+const formatPeso = (value: number) => value.toLocaleString('en-PH', { style: 'currency', currency: 'PHP' });
+const formatCompact = (value: number) => {
+  const abs = Math.abs(value);
+  const sign = value < 0 ? '−' : '';
+  if (abs >= 1e6) return `${sign}₱${(abs / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (abs >= 1e3) return `${sign}₱${(abs / 1e3).toFixed(abs >= 1e4 ? 0 : 1).replace(/\.0$/, '')}K`;
+  return `${sign}₱${Math.round(abs)}`;
+};
+const pct = (value: number) => `${Math.abs(value) < 10 ? Math.abs(value).toFixed(1).replace(/\.0$/, '') : Math.round(Math.abs(value))}%`;
+const monthName = (year: number, month: number) => new Date(year, month - 1, 1).toLocaleDateString('en-PH', { month: 'long', year: 'numeric' });
+const dayKey = (year: number, month: number, day: number) => `${year}-${month}-${day}`;
+const daysInMonth = (year: number, month: number) => new Date(year, month, 0).getDate();
+// 0 = Monday ... 6 = Sunday
+const weekdayIndex = (date: Date) => (date.getDay() + 6) % 7;
+const margin = (gross: number, profit: number) => (gross > 0 ? (profit / gross) * 100 : 0);
 
-function TabPanel(props: TabPanelProps) {
-  const { children, value, index, ...other } = props;
+const reviveDates = <T extends { date: Date }>(list: T[]): T[] => list.map((r) => ({ ...r, date: new Date(r.date) }));
+
+// ---------- chart colours (validated categorical pair; see the dataviz palette) ----------
+
+const useChartColors = () => {
+  const theme = useTheme();
+  const dark = theme.palette.mode === 'dark';
+  return {
+    profit: dark ? '#3987e5' : '#2a78d6',
+    purchase: dark ? '#d95926' : '#eb6834',
+    muted: '#898781',
+    deemphasis: dark ? '#4b4b47' : '#d3d2cb',
+    baseline: dark ? '#383835' : '#c3c2b7',
+    grid: theme.palette.divider,
+    surface: theme.palette.background.paper,
+    text: theme.palette.text.secondary,
+  };
+};
+
+const useWidth = () => {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    setWidth(node.clientWidth);
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width] as const;
+};
+
+const niceScale = (max: number, count = 4) => {
+  if (max <= 0) return { top: 1000, step: 250 };
+  const raw = max / count;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  const n = raw / pow;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * pow;
+  return { top: Math.ceil(max / step) * step, step };
+};
+
+type Segment = { name: string; value: number; color: string };
+type TooltipRow = { name: string; value: string; color?: string; line?: boolean };
+type ChartColumn = {
+  key: string;
+  tick: string;
+  segments: Segment[]; // bottom to top
+  ghost?: number;
+  title: string;
+  rows: TooltipRow[];
+  ariaLabel: string;
+};
+
+const roundedTop = (x: number, y: number, w: number, h: number) => {
+  const r = Math.min(4, w / 2, h);
+  return `M${x},${y + h}L${x},${y + r}Q${x},${y} ${x + r},${y}L${x + w - r},${y}Q${x + w},${y} ${x + w},${y + r}L${x + w},${y + h}Z`;
+};
+
+// Columns that grow from one baseline; stacked segments are separated by a 2px surface gap.
+const ColumnChart: React.FC<{
+  columns: ChartColumn[];
+  height?: number;
+  average?: { value: number; label: string };
+  label: string;
+}> = ({ columns, height = 240, average, label }) => {
+  const colors = useChartColors();
+  const [ref, width] = useWidth();
+  const [hover, setHover] = useState<number | null>(null);
+  const pad = { top: 12, right: 8, bottom: 26, left: 48 };
+  const plotW = Math.max(0, width - pad.left - pad.right);
+  const plotH = height - pad.top - pad.bottom;
+  const maxValue = Math.max(0, ...columns.map((c) => Math.max(c.segments.reduce((s, x) => s + Math.max(0, x.value), 0), c.ghost ?? 0)), average?.value ?? 0);
+  const { top, step } = niceScale(maxValue);
+  const ticks: number[] = [];
+  for (let v = 0; v <= top + step / 2; v += step) ticks.push(v);
+  const y = (v: number) => pad.top + plotH - (v / top) * plotH;
+  const slot = columns.length ? plotW / columns.length : 0;
+  const barW = Math.max(2, Math.min(24, slot * 0.68));
+  const tickEvery = Math.max(1, Math.ceil(columns.length / Math.max(1, Math.floor(plotW / 34))));
+
+  const hovered = hover !== null ? columns[hover] : null;
+  const hoverX = hover !== null ? pad.left + slot * hover + slot / 2 : 0;
+  const hoverTop = hovered ? y(Math.max(hovered.segments.reduce((s, x) => s + Math.max(0, x.value), 0), hovered.ghost ?? 0)) : 0;
 
   return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`simple-tabpanel-${index}`}
-      aria-labelledby={`simple-tab-${index}`}
-      {...other}
-    >
-      {value === index && (
-        <Fade in={value === index} timeout={300}>
-          <Box sx={{ p: 0 }}>
-            {children}
-          </Box>
-        </Fade>
+    <Box ref={ref} sx={{ position: 'relative', width: '100%', height }}>
+      {width > 0 && (
+        <svg width={width} height={height} role="img" aria-label={label} style={{ display: 'block', overflow: 'visible' }}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={pad.left} x2={pad.left + plotW} y1={y(t)} y2={y(t)} stroke={t === 0 ? colors.baseline : colors.grid} strokeWidth={1} />
+              <text x={pad.left - 8} y={y(t)} dy="0.32em" textAnchor="end" fontSize={11} fill={colors.text} style={{ fontVariantNumeric: 'tabular-nums' }}>
+                {formatCompact(t)}
+              </text>
+            </g>
+          ))}
+          {average && average.value > 0 && (
+            <g aria-hidden>
+              <line x1={pad.left} x2={pad.left + plotW} y1={y(average.value)} y2={y(average.value)} stroke={colors.text} strokeWidth={1} opacity={0.7} />
+              <text x={pad.left + plotW} y={y(average.value) - 5} textAnchor="end" fontSize={11} fontWeight={600} fill={colors.text}>
+                {average.label}
+              </text>
+            </g>
+          )}
+          {columns.map((column, i) => {
+            const cx = pad.left + slot * i + slot / 2;
+            const x = cx - barW / 2;
+            const dim = hover !== null && hover !== i;
+            let cursor = y(0);
+            const parts = column.segments.filter((s) => s.value > 0);
+            return (
+              <g
+                key={column.key}
+                tabIndex={0}
+                role="graphics-symbol"
+                aria-label={column.ariaLabel}
+                onMouseEnter={() => setHover(i)}
+                onMouseLeave={() => setHover(null)}
+                onFocus={() => setHover(i)}
+                onBlur={() => setHover(null)}
+                style={{ outline: 'none', cursor: 'default' }}
+              >
+                <rect x={pad.left + slot * i} y={pad.top} width={slot} height={plotH} fill="transparent" />
+                {hover === i && <rect x={pad.left + slot * i} y={pad.top} width={slot} height={plotH} fill={colors.text} opacity={0.06} rx={4} />}
+                {parts.map((segment, p) => {
+                  const h = (segment.value / top) * plotH;
+                  const gap = p > 0 ? 2 : 0;
+                  const segTop = cursor - h;
+                  const drawH = Math.max(0, h - gap);
+                  cursor = segTop;
+                  const isTop = p === parts.length - 1;
+                  return isTop ? (
+                    <path key={segment.name} d={roundedTop(x, segTop, barW, drawH)} fill={segment.color} opacity={dim ? 0.45 : 1} />
+                  ) : (
+                    <rect key={segment.name} x={x} y={segTop} width={barW} height={drawH} fill={segment.color} opacity={dim ? 0.45 : 1} />
+                  );
+                })}
+                {column.ghost !== undefined && column.ghost > 0 && (
+                  <circle cx={cx} cy={y(column.ghost)} r={4} fill={colors.muted} stroke={colors.surface} strokeWidth={2} opacity={dim ? 0.45 : 1} />
+                )}
+                {(i % tickEvery === 0 || i === columns.length - 1) && (
+                  <text x={cx} y={height - 8} textAnchor="middle" fontSize={11} fill={colors.text} fontWeight={hover === i ? 700 : 400}>
+                    {column.tick}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
       )}
-    </div>
-  );
-}
-
-const GrossSales: React.FC = () => {
-  const theme = useTheme();
-  const navigate = useNavigate();
-  const grossSalesContext = useContext(GrossSalesContext);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [passwordDialogOpen, setPasswordDialogOpen] = useState(true);
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [tabValue, setTabValue] = useState(0);
-  const [editingDaily, setEditingDaily] = useState<string | null>(null);
-  const [editingMonthly, setEditingMonthly] = useState<string | null>(null);
-  const [editingYearly, setEditingYearly] = useState<string | null>(null);
-  const [dailyExcelYear, setDailyExcelYear] = useState(() => new Date().getFullYear());
-  const [dailyExcelMonth, setDailyExcelMonth] = useState(() => new Date().getMonth() + 1);
-  const [editForm, setEditForm] = useState<{
-    gross: string;
-    purchase: string;
-    profit: string;
-  }>({
-    gross: '',
-    purchase: '',
-    profit: '',
-  });
-
-  // Use grossSalesData and dailySalesData from context
-  const grossSalesData = grossSalesContext.grossSalesData;
-  const dailySalesData = grossSalesContext.dailySalesData;
-
-  const dailyRecordByKey = useMemo(() => {
-    const map = new Map<string, DailySalesRecord>();
-    for (const record of dailySalesData) {
-      map.set(`${record.year}-${record.month}-${record.day}`, record);
-    }
-    return map;
-  }, [dailySalesData]);
-
-  const groupedData = useMemo(() => {
-    return grossSalesData.reduce((acc, record) => {
-      if (!acc[record.year]) acc[record.year] = [];
-      acc[record.year].push(record);
-      return acc;
-    }, {} as Record<number, GrossSalesRecord[]>);
-  }, [grossSalesData]);
-
-  const yearlyTotals = useMemo(() => {
-    return Object.keys(groupedData)
-      .map((year) => {
-        const yearInt = parseInt(year, 10);
-        const yearData = groupedData[yearInt] ?? [];
-        return {
-          year: yearInt,
-          gross: yearData.reduce((sum, record) => sum + record.gross, 0),
-          purchase: yearData.reduce((sum, record) => sum + record.purchase, 0),
-          profit: yearData.reduce((sum, record) => sum + record.profit, 0),
-        };
-      })
-      .sort((a, b) => b.year - a.year);
-  }, [groupedData]);
-
-  const overallTotals = useMemo(() => {
-    return grossSalesData.reduce(
-      (acc, record) => ({
-        gross: acc.gross + record.gross,
-        purchase: acc.purchase + record.purchase,
-        profit: acc.profit + record.profit,
-      }),
-      { gross: 0, purchase: 0, profit: 0 }
-    );
-  }, [grossSalesData]);
-
-  // Keep the analytics window stable during a render cycle.
-  const currentDate = useMemo(() => new Date(), []);
-  const currentYear = currentDate.getFullYear();
-  const currentMonth = currentDate.getMonth() + 1;
-
-  // Calculate profit margin
-  const profitMargin = useMemo(() => {
-    return overallTotals.gross > 0 ? (overallTotals.profit / overallTotals.gross) * 100 : 0;
-  }, [overallTotals.gross, overallTotals.profit]);
-
-  // Daily Analytics Calculations
-  const currentDay = currentDate.getDate();
-  
-  // Get current day data
-  const currentDayData = useMemo(() => {
-    return dailyRecordByKey.get(`${currentYear}-${currentMonth}-${currentDay}`);
-  }, [currentDay, currentMonth, currentYear, dailyRecordByKey]);
-
-  // Get yesterday's data
-  const yesterday = new Date(currentDate);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayYear = yesterday.getFullYear();
-  const yesterdayMonth = yesterday.getMonth() + 1;
-  const yesterdayDay = yesterday.getDate();
-  const yesterdayData = useMemo(() => {
-    return dailyRecordByKey.get(`${yesterdayYear}-${yesterdayMonth}-${yesterdayDay}`);
-  }, [dailyRecordByKey, yesterdayDay, yesterdayMonth, yesterdayYear]);
-
-  // Calculate daily growth percentage
-  const dailyGrowthPercentage = useMemo(() => {
-    return yesterdayData && currentDayData
-      ? ((currentDayData.gross - yesterdayData.gross) / yesterdayData.gross) * 100
-      : 0;
-  }, [currentDayData, yesterdayData]);
-
-  const dailyExcelYears = useMemo(() => {
-    const years = new Set<number>();
-    years.add(currentYear);
-    for (const record of dailySalesData) years.add(record.year);
-    return Array.from(years).sort((a, b) => b - a);
-  }, [currentYear, dailySalesData]);
-
-  const dailyExcelRows = useMemo(() => {
-    const rows: Array<{
-      key: string;
-      year: number;
-      month: number;
-      monthName: string;
-      day: number;
-      dayName: string;
-      date: Date;
-      dateLabel: string;
-      record: DailySalesRecord | null;
-      monthRowSpan: number;
-      isFirstOfMonth: boolean;
-    }> = [];
-
-    const month = dailyExcelMonth;
-    {
-      const daysInMonth = new Date(dailyExcelYear, month, 0).getDate();
-      const monthName = new Date(dailyExcelYear, month - 1, 1).toLocaleDateString('default', { month: 'long' });
-      for (let day = 1; day <= daysInMonth; day += 1) {
-        const key = `${dailyExcelYear}-${month}-${day}`;
-        const record = dailyRecordByKey.get(key) ?? null;
-        const date = new Date(dailyExcelYear, month - 1, day);
-        const dayName = record?.dayName ?? date.toLocaleDateString('default', { weekday: 'long' });
-        rows.push({
-          key,
-          year: dailyExcelYear,
-          month,
-          monthName,
-          day,
-          dayName,
-          date,
-          dateLabel: date.toLocaleDateString(),
-          record,
-          monthRowSpan: daysInMonth,
-          isFirstOfMonth: day === 1,
-        });
-      }
-    }
-
-    return rows;
-  }, [dailyExcelMonth, dailyExcelYear, dailyRecordByKey]);
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-PH', {
-      style: 'currency',
-      currency: 'PHP',
-      minimumFractionDigits: 2,
-    }).format(amount);
-  };
-
-  const handlePasswordSubmit = () => {
-    if (password === GROSS_SALES_PASSWORD) {
-      setIsAuthenticated(true);
-      setPasswordDialogOpen(false);
-      setError('');
-    } else {
-      setError('Incorrect password. Please try again.');
-    }
-  };
-
-  const handlePasswordKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handlePasswordSubmit();
-    }
-  };
-
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
-
-  const handleCloseDialog = () => {
-    navigate('/');
-  };
-
-  // Enhanced edit handlers for different record types
-  const handleEditDaily = (record: DailySalesRecord) => {
-    const recordKey = `${record.year}-${record.month}-${record.day}`;
-    setEditingDaily(recordKey);
-    setEditForm({
-      gross: record.gross.toString(),
-      purchase: record.purchase.toString(),
-      profit: record.profit.toString(),
-    });
-  };
-
-  const handleEditMonthly = (record: GrossSalesRecord) => {
-    const recordKey = `${record.year}-${record.month}`;
-    setEditingMonthly(recordKey);
-    setEditForm({
-      gross: record.gross.toString(),
-      purchase: record.purchase.toString(),
-      profit: record.profit.toString(),
-    });
-  };
-
-  const handleEditYearly = (yearData: { year: number; gross: number; purchase: number; profit: number }) => {
-    const recordKey = yearData.year.toString();
-    setEditingYearly(recordKey);
-    setEditForm({
-      gross: yearData.gross.toString(),
-      purchase: yearData.purchase.toString(),
-      profit: yearData.profit.toString(),
-    });
-  };
-
-  const handleSaveDaily = (record: DailySalesRecord) => {
-    const updatedRecord = {
-      ...record,
-      gross: parseFloat(editForm.gross) || 0,
-      purchase: parseFloat(editForm.purchase) || 0,
-      profit: parseFloat(editForm.gross) - parseFloat(editForm.purchase) || 0,
-    };
-
-    // Check if record already exists
-    const existingRecordIndex = dailySalesData.findIndex(r => 
-      r.year === record.year && r.month === record.month && r.day === record.day
-    );
-
-    let updatedDailyData: DailySalesRecord[];
-    
-    if (existingRecordIndex >= 0) {
-      // Update existing record
-      updatedDailyData = dailySalesData.map(r => 
-        r.year === record.year && r.month === record.month && r.day === record.day 
-          ? updatedRecord 
-          : r
-      );
-    } else {
-      // Add new record
-      updatedDailyData = [...dailySalesData, updatedRecord];
-    }
-
-    grossSalesContext.setDailySalesData(updatedDailyData);
-    localStorage.setItem('pos_daily_sales', JSON.stringify(updatedDailyData));
-    
-    setEditingDaily(null);
-    setEditForm({ gross: '', purchase: '', profit: '' });
-  };
-
-  const handleSaveMonthly = (record: GrossSalesRecord) => {
-    const updatedRecord = {
-      ...record,
-      gross: parseFloat(editForm.gross) || 0,
-      purchase: parseFloat(editForm.purchase) || 0,
-      profit: parseFloat(editForm.gross) - parseFloat(editForm.purchase) || 0,
-    };
-
-    const updatedGrossData = grossSalesData.map(r => 
-      r.year === record.year && r.month === record.month 
-        ? updatedRecord 
-        : r
-    );
-
-    grossSalesContext.setGrossSalesData(updatedGrossData);
-    localStorage.setItem('pos_gross_sales', JSON.stringify(updatedGrossData));
-    
-    setEditingMonthly(null);
-    setEditForm({ gross: '', purchase: '', profit: '' });
-  };
-
-  const handleSaveYearly = (year: number) => {
-    // For yearly data, we need to update all monthly records for that year
-    const yearRecords = grossSalesData.filter(r => r.year === year);
-    const totalOldGross = yearRecords.reduce((sum, r) => sum + r.gross, 0);
-    const totalOldPurchase = yearRecords.reduce((sum, r) => sum + r.purchase, 0);
-    
-    const newGross = parseFloat(editForm.gross) || 0;
-    const newPurchase = parseFloat(editForm.purchase) || 0;
-    
-    // Calculate the difference and distribute proportionally
-    const grossDiff = newGross - totalOldGross;
-    const purchaseDiff = newPurchase - totalOldPurchase;
-    
-    const updatedGrossData = grossSalesData.map(record => {
-      if (record.year === year) {
-        const proportion = totalOldGross > 0 ? record.gross / totalOldGross : 1 / yearRecords.length;
-        return {
-          ...record,
-          gross: record.gross + (grossDiff * proportion),
-          purchase: record.purchase + (purchaseDiff * proportion),
-          profit: (record.gross + (grossDiff * proportion)) - (record.purchase + (purchaseDiff * proportion)),
-        };
-      }
-      return record;
-    });
-
-    grossSalesContext.setGrossSalesData(updatedGrossData);
-    localStorage.setItem('pos_gross_sales', JSON.stringify(updatedGrossData));
-    
-    setEditingYearly(null);
-    setEditForm({ gross: '', purchase: '', profit: '' });
-  };
-
-  const handleCancelEdit = () => {
-    setEditingDaily(null);
-    setEditingMonthly(null);
-    setEditingYearly(null);
-    setEditForm({ gross: '', purchase: '', profit: '' });
-  };
-
-  const handleFormChange = (field: 'gross' | 'purchase' | 'profit', value: string) => {
-    setEditForm(prev => ({ ...prev, [field]: value }));
-  };
-
-  if (!isAuthenticated) {
-    return (
-      <Dialog 
-        open={passwordDialogOpen} 
-        onClose={() => {}} 
-        maxWidth="xs" 
-        fullWidth
-        PaperProps={{
-          sx: {
-            borderRadius: 4,
-            bgcolor: 'banner.main',
-            color: 'white',
-            boxShadow: '0 15px 30px rgba(16, 24, 22, 0.3)',
-            overflow: 'hidden',
-            position: 'relative',
-          }
-        }}
-        TransitionComponent={Slide}
-        TransitionProps={{ direction: 'up' } as any}
-      >
-        {/* X Button */}
-        <IconButton
-          onClick={handleCloseDialog}
+      {hovered && (
+        <Box
+          role="presentation"
           sx={{
             position: 'absolute',
-            top: 12,
-            right: 12,
-            zIndex: 10,
-            bgcolor: 'rgba(255,255,255,0.15)',
-            color: 'white',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.2)',
-            width: 40,
-            height: 40,
-            '&:hover': {
-              bgcolor: 'rgba(255,255,255,0.25)',
-              transform: 'scale(1.1)',
-            },
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <CloseIcon sx={{ fontSize: 20 }} />
-        </IconButton>
-
-        <Box sx={{ 
-          textAlign: 'center', 
-          pt: 3, 
-          pb: 1,
-          position: 'relative',
-          '&::before': {
-            content: '""',
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'url("data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.03"%3E%3Ccircle cx="30" cy="30" r="2"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
-          }
-        }}>
-          <Box sx={{ position: 'relative', zIndex: 1 }}>
-            <Grow in timeout={600}>
-              <Avatar sx={{ 
-                bgcolor: 'rgba(255,255,255,0.15)', 
-                mx: 'auto', 
-                mb: 2, 
-                width: 64, 
-                height: 64,
-                backdropFilter: 'blur(10px)',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-                border: '2px solid rgba(255,255,255,0.2)',
-              }}>
-                <LockIcon sx={{ fontSize: 32, color: 'white' }} />
-              </Avatar>
-            </Grow>
-            <Typography variant="h5" fontWeight={800} sx={{ mb: 1, letterSpacing: 0.5 }}>
-              Secure Access
-            </Typography>
-            <Typography variant="body2" sx={{ opacity: 0.9, px: 2 }}>
-              Enter password to access financial dashboard
-            </Typography>
-          </Box>
-        </Box>
-
-        <Box sx={{ px: 3, pb: 3 }}>
-          <Box sx={{ 
-            p: 3, 
-            bgcolor: 'rgba(255,255,255,0.1)', 
-            borderRadius: 3, 
-            backdropFilter: 'blur(20px)',
-            border: '1px solid rgba(255,255,255,0.2)',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1)',
-          }}>
-            <TextField
-              fullWidth
-              label="Password"
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={handlePasswordKeyDown}
-              variant="outlined"
-              error={!!error}
-              helperText={error}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  bgcolor: 'rgba(255,255,255,0.95)',
-                  borderRadius: 2,
-                  fontSize: '1rem',
-                  '& fieldset': {
-                    borderColor: 'rgba(255,255,255,0.3)',
-                    borderWidth: 2,
-                  },
-                  '&:hover fieldset': {
-                    borderColor: 'rgba(255,255,255,0.5)',
-                  },
-                  '&.Mui-focused fieldset': {
-                    borderColor: 'rgba(255,255,255,0.8)',
-                  },
-                },
-                '& .MuiInputLabel-root': {
-                  color: 'rgba(0,0,0,0.7)',
-                  fontSize: '1rem',
-                  fontWeight: 600,
-                  '&.Mui-focused': {
-                    color: 'rgba(0,0,0,0.8)',
-                  },
-                },
-                '& .MuiFormHelperText-root': {
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  mt: 1,
-                  textAlign: 'center',
-                }
-              }}
-              InputProps={{
-                endAdornment: (
-                  <IconButton
-                    onClick={() => setShowPassword(!showPassword)}
-                    edge="end"
-                    sx={{ 
-                      color: 'rgba(0,0,0,0.7)',
-                      '&:hover': {
-                        bgcolor: 'rgba(0,0,0,0.05)',
-                      }
-                    }}
-                  >
-                    {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
-                  </IconButton>
-                ),
-              }}
-            />
-          </Box>
-          
-          <Button
-            fullWidth
-            variant="contained"
-            onClick={handlePasswordSubmit}
-            sx={{
-              mt: 3,
-              bgcolor: 'rgba(255,255,255,0.2)',
-              color: 'white',
-              fontWeight: 700,
-              borderRadius: 3,
-              py: 1.5,
-              fontSize: '1rem',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255,255,255,0.3)',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-              '&:hover': {
-                bgcolor: 'rgba(255,255,255,0.3)',
-                transform: 'translateY(-2px)',
-                boxShadow: '0 8px 30px rgba(0,0,0,0.2)',
-              },
-              '&:active': {
-                transform: 'translateY(0px)',
-              },
-              transition: 'all 0.2s ease',
-            }}
-          >
-            Access Dashboard
-          </Button>
-        </Box>
-      </Dialog>
-    );
-  }
-
-  return (
-    <Box sx={{ p: { xs: 0, md: 0.5 } }}>
-      {/* Compact Header */}
-      <Fade in timeout={600}>
-        <Box sx={{ mb: 3 }}>
-          <Box sx={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            mb: 2,
-            p: 2.5,
+            left: Math.min(Math.max(hoverX, 90), Math.max(90, width - 90)),
+            top: Math.max(0, hoverTop - 8),
+            transform: 'translate(-50%, -100%)',
+            pointerEvents: 'none',
+            zIndex: 2,
+            minWidth: 170,
+            px: 1.5,
+            py: 1,
+            borderRadius: '10px',
             bgcolor: 'background.paper',
-            borderRadius: 3,
-            border: `1px solid ${theme.palette.divider}`,
-          }}>
-            <Box sx={{ 
-              bgcolor: 'banner.main',
-              borderRadius: '50%',
-              p: 1.5,
-              mr: 2,
-              boxShadow: '0 6px 20px rgba(16, 24, 22, 0.3)',
-            }}>
-              <TrendingUpIcon sx={{ fontSize: 28, color: 'white' }} />
-            </Box>
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="h4" fontWeight={800} color="text.primary" sx={{ mb: 0.5 }}>
-                Financial Dashboard
-              </Typography>
-              <Typography variant="body1" color="text.secondary" sx={{ opacity: 0.8 }}>
-                Sales analytics and performance insights
-              </Typography>
-            </Box>
-            <Box sx={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: 1,
-              bgcolor: profitMargin > 0 ? 'success.main' : 'error.main',
-              color: 'white',
-              px: 2,
-              py: 1,
-              borderRadius: 2,
-              boxShadow: 1,
-            }}>
-              {profitMargin > 0 ? <TrendingUpIcon fontSize="small" /> : <TrendingDownIcon fontSize="small" />}
-              <Box>
-                <Typography variant="caption" sx={{ opacity: 0.9 }}>
-                  Profit Margin
-                </Typography>
-                <Typography variant="body2" fontWeight={700}>
-                  {profitMargin.toFixed(1)}%
-                </Typography>
-              </Box>
-            </Box>
-          </Box>
-        </Box>
-      </Fade>
-
-      {/* Compact Summary Section */}
-      <Grow in timeout={800}>
-        <Grid container spacing={2} sx={{ mb: 3 }}>
-          {/* Total Revenue Card */}
-          <Grid item xs={12} md={4}>
-            <Card sx={{ 
-              borderRadius: 3, 
-              background: '#15803d', 
-              color: 'white', 
-              height: '100%',
-              boxShadow: '0 8px 25px rgba(76, 175, 80, 0.25)',
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 35px rgba(76, 175, 80, 0.35)',
-              }
-            }}>
-              <CardContent sx={{ p: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                  <Box sx={{ 
-                    bgcolor: 'rgba(255,255,255,0.2)', 
-                    borderRadius: '50%', 
-                    p: 1,
-                    backdropFilter: 'blur(10px)',
-                  }}>
-                    <AccountBalanceIcon sx={{ fontSize: 20 }} />
-                  </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Typography variant="body2" fontWeight={600} sx={{ opacity: 0.9, mb: 0.5 }}>
-                      Total Revenue
-                    </Typography>
-                    <Typography variant="h5" fontWeight={800}>
-                      {formatCurrency(overallTotals.gross)}
-                    </Typography>
-                  </Box>
-                </Box>
-                <Divider sx={{ borderColor: 'rgba(255,255,255,0.3)', mb: 1.5 }} />
-                <Stack spacing={1}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Expenses:</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {formatCurrency(overallTotals.purchase)}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Net Profit:</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {formatCurrency(overallTotals.profit)}
-                    </Typography>
-                  </Box>
-                  <LinearProgress 
-                    variant="determinate" 
-                    value={profitMargin} 
-                    sx={{ 
-                      height: 6, 
-                      borderRadius: 3,
-                      bgcolor: 'rgba(255,255,255,0.3)',
-                      '& .MuiLinearProgress-bar': {
-                        bgcolor: 'rgba(255,255,255,0.8)',
-                        borderRadius: 3,
-                      }
-                    }} 
-                  />
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Today's Performance */}
-          <Grid item xs={12} md={4}>
-            <Card sx={{ 
-              borderRadius: 3, 
-              background: '#1d4ed8', 
-              color: 'white', 
-              height: '100%',
-              boxShadow: '0 8px 25px rgba(33, 150, 243, 0.25)',
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: '0 12px 35px rgba(33, 150, 243, 0.35)',
-              }
-            }}>
-              <CardContent sx={{ p: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                  <Box sx={{ 
-                    bgcolor: 'rgba(255,255,255,0.2)', 
-                    borderRadius: '50%', 
-                    p: 1,
-                    backdropFilter: 'blur(10px)',
-                  }}>
-                    <TodayIcon sx={{ fontSize: 20 }} />
-                  </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Typography variant="body2" fontWeight={600} sx={{ opacity: 0.9, mb: 0.5 }}>
-                      Today's Sales
-                    </Typography>
-                    <Typography variant="h5" fontWeight={800}>
-                      {formatCurrency(currentDayData?.gross || 0)}
-                    </Typography>
-                  </Box>
-                </Box>
-                <Divider sx={{ borderColor: 'rgba(255,255,255,0.3)', mb: 1.5 }} />
-                <Stack spacing={1}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Date:</Typography>
-                    <Chip 
-                      label={currentDate.toLocaleDateString('default', { weekday: 'short', month: 'short', day: 'numeric' })} 
-                      size="small"
-                      sx={{ 
-                        bgcolor: 'rgba(255,255,255,0.2)', 
-                        color: 'white',
-                        fontWeight: 600,
-                        backdropFilter: 'blur(10px)',
-                        fontSize: '0.75rem',
-                      }} 
-                    />
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Profit:</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {formatCurrency(currentDayData?.profit || 0)}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ 
-                    bgcolor: 'rgba(255,255,255,0.1)', 
-                    p: 1, 
-                    borderRadius: 2,
-                    backdropFilter: 'blur(10px)',
-                  }}>
-                    <Typography variant="caption" sx={{ opacity: 0.8, textAlign: 'center', display: 'block' }}>
-                      {currentDayData ? 'Sales recorded today' : 'No sales recorded today'}
-                    </Typography>
-                  </Box>
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-
-          {/* Daily Growth Analytics */}
-          <Grid item xs={12} md={4}>
-            <Card sx={{ 
-              borderRadius: 3, 
-              background: (dailyGrowthPercentage >= 0 
-                ? '#b45309'
-                : '#b91c1c'), 
-              color: 'white', 
-              height: '100%',
-              boxShadow: (dailyGrowthPercentage >= 0 
-                ? '0 8px 25px rgba(255, 152, 0, 0.25)'
-                : '0 8px 25px rgba(244, 67, 54, 0.25)'),
-              transition: 'all 0.2s ease',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: (dailyGrowthPercentage >= 0 
-                  ? '0 12px 35px rgba(255, 152, 0, 0.35)'
-                  : '0 12px 35px rgba(244, 67, 54, 0.35)'),
-              }
-            }}>
-              <CardContent sx={{ p: 2.5 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-                  <Box sx={{ 
-                    bgcolor: 'rgba(255,255,255,0.2)', 
-                    borderRadius: '50%', 
-                    p: 1,
-                    backdropFilter: 'blur(10px)',
-                  }}>
-                    <ShowChartIcon sx={{ fontSize: 20 }} />
-                  </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    <Typography variant="body2" fontWeight={600} sx={{ opacity: 0.9, mb: 0.5 }}>
-                      Daily Growth
-                    </Typography>
-                    <Typography variant="h5" fontWeight={800}>
-                      {yesterdayData && currentDayData 
-                        ? `${dailyGrowthPercentage >= 0 ? '+' : ''}${dailyGrowthPercentage.toFixed(1)}%`
-                        : 'N/A'
-                      }
-                    </Typography>
-                  </Box>
-                </Box>
-                <Divider sx={{ borderColor: 'rgba(255,255,255,0.3)', mb: 1.5 }} />
-                <Stack spacing={1}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Yesterday:</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {formatCurrency(yesterdayData?.gross || 0)}
-                    </Typography>
-                  </Box>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>Difference:</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {currentDayData && yesterdayData 
-                        ? `${dailyGrowthPercentage >= 0 ? '+' : ''}${formatCurrency(currentDayData.gross - yesterdayData.gross)}`
-                        : 'N/A'
-                      }
-                    </Typography>
-                  </Box>
-                  <Box sx={{ 
-                    bgcolor: 'rgba(255,255,255,0.1)', 
-                    p: 1, 
-                    borderRadius: 2,
-                    backdropFilter: 'blur(10px)',
-                  }}>
-                    <Typography variant="caption" sx={{ opacity: 0.8, textAlign: 'center', display: 'block' }}>
-                      {dailyGrowthPercentage > 0 ? '📈 Daily improvement' : 
-                       dailyGrowthPercentage < 0 ? '📉 Daily decline' : '➖ Same as yesterday'}
-                    </Typography>
-                  </Box>
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-      </Grow>
-
-      {/* Compact Tabs Section */}
-      <Grow in timeout={1000}>
-        <Card sx={{ 
-          borderRadius: 3, 
-          overflow: 'hidden',
-          boxShadow: '0 8px 25px rgba(0,0,0,0.1)',
-          backdropFilter: 'blur(20px)',
-          border: `1px solid ${theme.palette.divider}`,
-        }}>
-          <Box sx={{ 
-            bgcolor: 'banner.main', 
-            color: 'white', 
-            p: 2.5,
-            position: 'relative',
-            overflow: 'hidden',
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'url("data:image/svg+xml,%3Csvg width="60" height="60" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg"%3E%3Cg fill="none" fill-rule="evenodd"%3E%3Cg fill="%23ffffff" fill-opacity="0.05"%3E%3Ccircle cx="30" cy="30" r="2"/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")',
-            }
-          }}>
-            <Box sx={{ position: 'relative', zIndex: 1 }}>
-              <Typography variant="h5" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 0.5 }}>
-                <AssessmentIcon sx={{ fontSize: 24 }} />
-                Financial Reports
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                Detailed analysis and historical data
-              </Typography>
-            </Box>
-          </Box>
-          
-          <Box sx={{ 
-            borderBottom: 1, 
+            border: 1,
             borderColor: 'divider',
-            bgcolor: theme.palette.mode === 'dark' 
-              ? 'rgba(255,255,255,0.02)' 
-              : 'rgba(255,255,255,0.8)',
-            backdropFilter: 'blur(10px)',
-          }}>
-            <Tabs 
-              value={tabValue} 
-              onChange={handleTabChange} 
-              sx={{ 
-                px: 2,
-                minHeight: 48,
-                '& .MuiTab-root': {
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  minHeight: 48,
-                  borderRadius: 2,
-                  mx: 0.5,
-                  transition: 'all 0.2s ease',
-                  '&:hover': {
-                    bgcolor: 'rgba(16, 24, 22, 0.1)',
-                  },
-                  '&.Mui-selected': {
-                    bgcolor: 'rgba(102, 126, 234, 0.15)',
-                    color: 'primary.main',
-                  }
-                },
-                '& .MuiTabs-indicator': {
-                  height: 3,
-                  borderRadius: 2,
-                  bgcolor: 'banner.main',
-                }
-              }}
-            >
-              <Tab 
-                label="Daily Analytics" 
-                icon={<TodayIcon fontSize="small" />} 
-                iconPosition="start"
-                sx={{ gap: 1 }}
-              />
-              <Tab 
-                label="Monthly Analytics" 
-                icon={<CalendarIcon fontSize="small" />} 
-                iconPosition="start"
-                sx={{ gap: 1 }}
-              />
-              <Tab 
-                label="Yearly Overview" 
-                icon={<DateRangeIcon fontSize="small" />} 
-                iconPosition="start"
-                sx={{ gap: 1 }}
-              />
-            </Tabs>
-          </Box>
-
-          {/* Daily Analytics Tab */}
-          <TabPanel value={tabValue} index={0}>
-            <Box sx={{ p: 2 }}>
-              {/* Today's Summary */}
-              <Box sx={{ mb: 3 }}>
-                <Box sx={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: 2, 
-                  mb: 2,
-                  p: 2,
-                  background: 'linear-gradient(135deg, rgba(33, 150, 243, 0.08) 0%, rgba(21, 101, 192, 0.08) 100%)',
-                  borderRadius: 2,
-                  border: '1px solid',
-                  borderColor: 'info.200',
-                  boxShadow: '0 2px 10px rgba(33, 150, 243, 0.1)',
-                }}>
-                  <Avatar sx={{ 
-                    bgcolor: 'info.main', 
-                    color: 'white',
-                    width: 40,
-                    height: 40,
-                    boxShadow: '0 4px 15px rgba(33, 150, 243, 0.3)',
-                  }}>
-                    <TodayIcon sx={{ fontSize: 20 }} />
-                  </Avatar>
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="h6" fontWeight={700} color="info.main">
-                      Today's Performance
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {currentDate.toLocaleDateString('default', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                    </Typography>
-                  </Box>
-                  <Stack direction="row" spacing={1}>
-                    <Chip 
-                      label={formatCurrency(currentDayData?.gross || 0)}
-                      color="success"
-                      variant="filled"
-                      size="small"
-                      sx={{ fontWeight: 600, fontSize: '0.75rem' }}
-                    />
-                    {yesterdayData && currentDayData && (
-                      <Chip 
-                        label={`${dailyGrowthPercentage >= 0 ? '+' : ''}${dailyGrowthPercentage.toFixed(1)}%`}
-                        color={dailyGrowthPercentage >= 0 ? 'success' : 'error'}
-                        variant="outlined"
-                        size="small"
-                        sx={{ fontWeight: 600, fontSize: '0.75rem' }}
-                      />
-                    )}
-                  </Stack>
-                </Box>
-
-                {/* Today's Details */}
-                {currentDayData ? (
-                  <Grid container spacing={2} sx={{ mb: 3 }}>
-                    <Grid item xs={12} md={4}>
-                      <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'success.50', border: '1px solid', borderColor: 'success.200' }}>
-                        <Typography variant="h4" fontWeight={700} color="success.main">
-                          {formatCurrency(currentDayData.gross)}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          Gross Sales
-                        </Typography>
-                      </Card>
-                    </Grid>
-                    <Grid item xs={12} md={4}>
-                      <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.200' }}>
-                        <Typography variant="h4" fontWeight={700} color="warning.main">
-                          {formatCurrency(currentDayData.purchase)}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          Expenses
-                        </Typography>
-                      </Card>
-                    </Grid>
-                    <Grid item xs={12} md={4}>
-                      <Card sx={{ p: 2, textAlign: 'center', bgcolor: 'primary.50', border: '1px solid', borderColor: 'primary.200' }}>
-                        <Typography variant="h4" fontWeight={700} color="primary.main">
-                          {formatCurrency(currentDayData.profit)}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          Net Profit
-                        </Typography>
-                      </Card>
-                    </Grid>
-                  </Grid>
-                ) : (
-                  <Alert severity="info" sx={{ mb: 3 }}>
-                    No sales recorded for today yet. Start selling to see daily analytics!
-                  </Alert>
-                )}
-              </Box>
-
-              {/* Daily Records Table */}
-              <Box sx={{ mb: 3 }}>
-                <Typography variant="h6" fontWeight={700} sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CalendarIcon color="primary" />
-                  Daily Records (Excel View)
-                </Typography>
-                <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap' }}>
-                  {dailyExcelYears.map((year) => (
-                    <Chip
-                      key={year}
-                      label={year}
-                      clickable
-                      color={dailyExcelYear === year ? 'primary' : 'default'}
-                      variant={dailyExcelYear === year ? 'filled' : 'outlined'}
-                      onClick={() => setDailyExcelYear(year)}
-                      sx={{ fontWeight: 700 }}
-                    />
-                  ))}
-                </Stack>
-                <Tabs
-                  value={dailyExcelMonth}
-                  onChange={(_, next) => setDailyExcelMonth(next)}
-                  variant="scrollable"
-                  scrollButtons="auto"
-                  sx={{
-                    mb: 2,
-                    minHeight: 40,
-                    '& .MuiTab-root': { minHeight: 40, fontWeight: 700 },
-                  }}
-                >
-                  {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => (
-                    <Tab
-                      key={month}
-                      label={new Date(dailyExcelYear, month - 1, 1).toLocaleDateString('default', { month: 'short' })}
-                      value={month}
-                    />
-                  ))}
-                </Tabs>
-                <TableContainer component={Paper} elevation={2} sx={{ 
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
-                }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ 
-                        bgcolor: 'action.hover',
-                        '& .MuiTableCell-head': {
-                          fontWeight: 700,
-                          fontSize: '0.85rem',
-                          color: 'text.primary',
-                          py: 1.5,
-                        }
-                      }}>
-                        <TableCell>Month</TableCell>
-                        <TableCell>Date</TableCell>
-                        <TableCell>Day</TableCell>
-                        <TableCell align="right">Gross Sales</TableCell>
-                        <TableCell align="right">Expenses</TableCell>
-                        <TableCell align="right">Net Profit</TableCell>
-                        <TableCell align="center">Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {dailyExcelRows.map((row) => {
-                        const isEditing = editingDaily === row.key;
-                        const record: DailySalesRecord = row.record ?? {
-                          year: row.year,
-                          month: row.month,
-                          day: row.day,
-                          dayName: row.dayName,
-                          monthName: row.monthName,
-                          gross: 0,
-                          purchase: 0,
-                          profit: 0,
-                          date: row.date,
-                        };
-
-                        const editedProfit = (parseFloat(editForm.gross) || 0) - (parseFloat(editForm.purchase) || 0);
-
-                        return (
-                          <TableRow
-                            key={row.key}
-                            sx={{
-                              '&:hover': { bgcolor: 'action.hover' },
-                              transition: 'all 0.15s ease',
-                              '& .MuiTableCell-root': {
-                                py: 1.5,
-                                fontSize: '0.85rem',
-                              },
-                              bgcolor:
-                                row.year === currentYear && row.month === currentMonth && row.day === currentDay
-                                  ? 'rgba(33, 150, 243, 0.05)'
-                                  : 'inherit',
-                            }}
-                          >
-                            {row.isFirstOfMonth && (
-                              <TableCell
-                                rowSpan={row.monthRowSpan}
-                                sx={{
-                                  verticalAlign: 'top',
-                                  fontWeight: 800,
-                                  bgcolor: 'rgba(102, 126, 234, 0.06)',
-                                }}
-                              >
-                                <Box>
-                                  <Typography variant="body2" fontWeight={800}>
-                                    {row.monthName}
-                                  </Typography>
-                                  <Typography variant="caption" color="text.secondary" fontWeight={700}>
-                                    {row.year}
-                                  </Typography>
-                                </Box>
-                              </TableCell>
-                            )}
-                            <TableCell>
-                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                                <Avatar sx={{ 
-                                  width: 28, 
-                                  height: 28, 
-                                  bgcolor: row.year === currentYear && row.month === currentMonth && row.day === currentDay ? 'info.main' : 'secondary.main', 
-                                  fontSize: '0.75rem',
-                                  fontWeight: 700,
-                                  boxShadow: 1,
-                                }}>
-                                  {row.day}
-                                </Avatar>
-                                <Box>
-                                  <Typography variant="body2" fontWeight={700}>
-                                    {row.dateLabel}
-                                  </Typography>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {row.year === currentYear && row.month === currentMonth && row.day === currentDay ? 'Today' : row.dayName}
-                                  </Typography>
-                                </Box>
-                              </Box>
-                            </TableCell>
-                            <TableCell>
-                              <Typography variant="body2" fontWeight={600}>
-                                {row.dayName}
-                              </Typography>
-                            </TableCell>
-                            <TableCell align="right">
-                              {isEditing ? (
-                                <TextField
-                                  size="small"
-                                  type="number"
-                                  value={editForm.gross}
-                                  onChange={(e) => handleFormChange('gross', e.target.value)}
-                                  inputProps={{ min: 0, step: 0.01 }}
-                                  sx={{ width: 100 }}
-                                />
-                              ) : (
-                                <Typography variant="body2" sx={{ color: 'success.main', fontWeight: 600 }}>
-                                  {formatCurrency(record.gross)}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell align="right">
-                              {isEditing ? (
-                                <TextField
-                                  size="small"
-                                  type="number"
-                                  value={editForm.purchase}
-                                  onChange={(e) => handleFormChange('purchase', e.target.value)}
-                                  inputProps={{ min: 0, step: 0.01 }}
-                                  sx={{ width: 100 }}
-                                />
-                              ) : (
-                                <Typography variant="body2" sx={{ color: 'warning.main', fontWeight: 600 }}>
-                                  {formatCurrency(record.purchase)}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell align="right">
-                              {isEditing ? (
-                                <Typography variant="body2" sx={{ color: editedProfit >= 0 ? 'primary.main' : 'error.main', fontWeight: 600 }}>
-                                  {formatCurrency(editedProfit)}
-                                </Typography>
-                              ) : (
-                                <Typography variant="body2" sx={{ color: record.profit >= 0 ? 'primary.main' : 'error.main', fontWeight: 600 }}>
-                                  {formatCurrency(record.profit)}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell align="center">
-                              {isEditing ? (
-                                <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-                                  <Tooltip title="Save">
-                                    <IconButton
-                                      size="small"
-                                      color="success"
-                                      onClick={() => handleSaveDaily(record)}
-                                    >
-                                      <SaveIcon fontSize="small" />
-                                    </IconButton>
-                                  </Tooltip>
-                                  <Tooltip title="Cancel">
-                                    <IconButton
-                                      size="small"
-                                      color="error"
-                                      onClick={handleCancelEdit}
-                                    >
-                                      <CancelIcon fontSize="small" />
-                                    </IconButton>
-                                  </Tooltip>
-                                </Box>
-                              ) : (
-                                <Tooltip title={row.record ? 'Edit' : 'Add Data'}>
-                                  <IconButton
-                                    size="small"
-                                    color={row.record ? 'primary' : 'secondary'}
-                                    onClick={() => handleEditDaily(record)}
-                                  >
-                                    <EditIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
-            </Box>
-          </TabPanel>
-
-          {/* Monthly View Tab */}
-          <TabPanel value={tabValue} index={1}>
-            <Box sx={{ p: 2 }}>
-              {Object.keys(groupedData).length > 0 ? (
-                Object.keys(groupedData)
-                  .sort((a, b) => parseInt(b) - parseInt(a))
-                  .map((year, yearIndex) => (
-                    <Fade in timeout={600 + yearIndex * 150} key={year}>
-                      <Box sx={{ mb: 3 }}>
-                        <Box sx={{ 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          gap: 2, 
-                          mb: 2,
-                          p: 2,
-                          background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.08) 0%, rgba(118, 75, 162, 0.08) 100%)',
-                          borderRadius: 2,
-                          border: '1px solid',
-                          borderColor: 'primary.200',
-                          boxShadow: '0 2px 10px rgba(16, 24, 22, 0.1)',
-                        }}>
-                          <Avatar sx={{ 
-                            bgcolor: 'primary.main', 
-                            color: 'white',
-                            width: 40,
-                            height: 40,
-                            boxShadow: '0 4px 15px rgba(16, 24, 22, 0.3)',
-                          }}>
-                            <CalendarIcon sx={{ fontSize: 20 }} />
-                          </Avatar>
-                          <Box sx={{ flex: 1 }}>
-                            <Typography variant="h6" fontWeight={700} color="primary.main">
-                              {year}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              Financial performance overview
-                            </Typography>
-                          </Box>
-                          <Stack direction="row" spacing={1}>
-                            <Chip 
-                              label={`${groupedData[parseInt(year)].length} months`}
-                              color="primary"
-                              variant="outlined"
-                              size="small"
-                              sx={{ fontWeight: 600, fontSize: '0.75rem' }}
-                            />
-                            <Chip 
-                              label={formatCurrency(groupedData[parseInt(year)].reduce((sum, record) => sum + record.gross, 0))}
-                              color="success"
-                              variant="filled"
-                              size="small"
-                              sx={{ fontWeight: 600, fontSize: '0.75rem' }}
-                            />
-                          </Stack>
-                        </Box>
-                        
-                        <TableContainer component={Paper} elevation={2} sx={{ 
-                          borderRadius: 2,
-                          overflow: 'hidden',
-                          boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
-                        }}>
-                          <Table size="small">
-                            <TableHead>
-                              <TableRow sx={{ 
-                                bgcolor: 'action.hover',
-                                '& .MuiTableCell-head': {
-                                  fontWeight: 700,
-                                  fontSize: '0.85rem',
-                                  color: 'text.primary',
-                                  py: 1.5,
-                                }
-                              }}>
-                                <TableCell>Month</TableCell>
-                                <TableCell align="right">Gross Sales</TableCell>
-                                <TableCell align="right">Expenses</TableCell>
-                                <TableCell align="right">Net Profit</TableCell>
-                                <TableCell align="right">Date</TableCell>
-                                <TableCell align="center">Actions</TableCell>
-                              </TableRow>
-                            </TableHead>
-                            <TableBody>
-                              {groupedData[parseInt(year)]
-                                .sort((a, b) => b.month - a.month)
-                                .map((record, index) => {
-                                  const recordKey = `${record.year}-${record.month}`;
-                                  const isEditing = editingMonthly === recordKey;
-                                  
-                                  return (
-                                    <TableRow key={`${record.year}-${record.month}`} sx={{ 
-                                      '&:hover': { 
-                                        bgcolor: 'action.hover',
-                                        transform: 'scale(1.005)',
-                                      },
-                                      transition: 'all 0.15s ease',
-                                      '& .MuiTableCell-root': {
-                                        py: 1.5,
-                                        fontSize: '0.85rem',
-                                      }
-                                    }}>
-                                      <TableCell>
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                                          <Avatar sx={{ 
-                                            width: 28, 
-                                            height: 28, 
-                                            bgcolor: 'secondary.main', 
-                                            fontSize: '0.75rem',
-                                            fontWeight: 600,
-                                            boxShadow: 1,
-                                          }}>
-                                            {record.monthName.charAt(0)}
-                                          </Avatar>
-                                          <Box>
-                                            <Typography variant="body2" fontWeight={600}>
-                                              {record.monthName}
-                                            </Typography>
-                                            <Typography variant="caption" color="text.secondary">
-                                              {record.year}
-                                            </Typography>
-                                          </Box>
-                                        </Box>
-                                      </TableCell>
-                                      <TableCell align="right">
-                                        {isEditing ? (
-                                          <TextField
-                                            size="small"
-                                            type="number"
-                                            value={editForm.gross}
-                                            onChange={(e) => handleFormChange('gross', e.target.value)}
-                                            inputProps={{ min: 0, step: 0.01 }}
-                                            sx={{ width: 120 }}
-                                          />
-                                        ) : (
-                                          <Typography variant="body2" sx={{ color: 'success.main', fontWeight: 600 }}>
-                                            {formatCurrency(record.gross)}
-                                          </Typography>
-                                        )}
-                                      </TableCell>
-                                      <TableCell align="right">
-                                        {isEditing ? (
-                                          <TextField
-                                            size="small"
-                                            type="number"
-                                            value={editForm.purchase}
-                                            onChange={(e) => handleFormChange('purchase', e.target.value)}
-                                            inputProps={{ min: 0, step: 0.01 }}
-                                            sx={{ width: 120 }}
-                                          />
-                                        ) : (
-                                          <Typography variant="body2" sx={{ color: 'warning.main', fontWeight: 600 }}>
-                                            {formatCurrency(record.purchase)}
-                                          </Typography>
-                                        )}
-                                      </TableCell>
-                                      <TableCell align="right">
-                                        {isEditing ? (
-                                          <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 600 }}>
-                                            {formatCurrency((parseFloat(editForm.gross) || 0) - (parseFloat(editForm.purchase) || 0))}
-                                          </Typography>
-                                        ) : (
-                                          <Typography variant="body2" sx={{ color: 'primary.main', fontWeight: 600 }}>
-                                            {formatCurrency(record.profit)}
-                                          </Typography>
-                                        )}
-                                      </TableCell>
-                                      <TableCell align="right">
-                                        <Chip 
-                                          label={record.date.toLocaleDateString()}
-                                          variant="outlined"
-                                          size="small"
-                                          sx={{ fontWeight: 500, fontSize: '0.7rem' }}
-                                        />
-                                      </TableCell>
-                                      <TableCell align="center">
-                                        {isEditing ? (
-                                          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-                                            <Tooltip title="Save">
-                                              <IconButton
-                                                size="small"
-                                                color="success"
-                                                onClick={() => handleSaveMonthly(record)}
-                                              >
-                                                <SaveIcon fontSize="small" />
-                                              </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Cancel">
-                                              <IconButton
-                                                size="small"
-                                                color="error"
-                                                onClick={handleCancelEdit}
-                                              >
-                                                <CancelIcon fontSize="small" />
-                                              </IconButton>
-                                            </Tooltip>
-                                          </Box>
-                                        ) : (
-                                          <Tooltip title="Edit">
-                                            <IconButton
-                                              size="small"
-                                              color="primary"
-                                              onClick={() => handleEditMonthly(record)}
-                                            >
-                                              <EditIcon fontSize="small" />
-                                            </IconButton>
-                                          </Tooltip>
-                                        )}
-                                      </TableCell>
-                                    </TableRow>
-                                  );
-                                })}
-                            </TableBody>
-                          </Table>
-                        </TableContainer>
-                      </Box>
-                    </Fade>
-                  ))
-              ) : (
-                <Box sx={{ textAlign: 'center', py: 6 }}>
-                  <Avatar sx={{ 
-                    bgcolor: 'grey.100', 
-                    mx: 'auto', 
-                    mb: 2, 
-                    width: 56, 
-                    height: 56,
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                  }}>
-                    <CalendarIcon sx={{ fontSize: 28, color: 'grey.400' }} />
-                  </Avatar>
-                  <Typography variant="h6" color="text.secondary" gutterBottom fontWeight={600}>
-                    No Monthly Data Available
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Start by exporting sales to generate reports
-                  </Typography>
-                  <Button 
-                    variant="contained" 
-                    size="small"
-                    sx={{ 
-                      borderRadius: 2,
-                      px: 3,
-                      py: 1,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Go to Sales Record
-                  </Button>
-                </Box>
-              )}
-            </Box>
-          </TabPanel>
-
-          {/* Yearly Summary Tab */}
-          <TabPanel value={tabValue} index={2}>
-            <Box sx={{ p: 2 }}>
-              {yearlyTotals.length > 0 ? (
-                <TableContainer component={Paper} elevation={2} sx={{ 
-                  borderRadius: 2,
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
-                }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ 
-                        bgcolor: 'action.hover',
-                        '& .MuiTableCell-head': {
-                          fontWeight: 700,
-                          fontSize: '0.9rem',
-                          color: 'text.primary',
-                          py: 2,
-                        }
-                      }}>
-                        <TableCell>Year</TableCell>
-                        <TableCell align="right">Gross Sales</TableCell>
-                        <TableCell align="right">Expenses</TableCell>
-                        <TableCell align="right">Net Profit</TableCell>
-                        <TableCell align="right">Profit Margin</TableCell>
-                        <TableCell align="center">Actions</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {yearlyTotals.map((yearData, index) => {
-                        const recordKey = yearData.year.toString();
-                        const isEditing = editingYearly === recordKey;
-                        
-                        return (
-                          <Fade in timeout={400 + index * 150} key={yearData.year}>
-                            <TableRow sx={{ 
-                              '&:hover': { 
-                                bgcolor: 'action.hover',
-                                transform: 'scale(1.005)',
-                              },
-                              transition: 'all 0.15s ease',
-                              '& .MuiTableCell-root': {
-                                py: 2,
-                                fontSize: '0.9rem',
-                              }
-                            }}>
-                              <TableCell>
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                                  <Avatar sx={{ 
-                                    bgcolor: 'primary.main', 
-                                    color: 'white',
-                                    width: 36,
-                                    height: 36,
-                                    boxShadow: '0 4px 15px rgba(16, 24, 22, 0.3)',
-                                  }}>
-                                    <DateRangeIcon sx={{ fontSize: 18 }} />
-                                  </Avatar>
-                                  <Box>
-                                    <Typography variant="body1" fontWeight={700}>
-                                      {yearData.year}
-                                    </Typography>
-                                    <Typography variant="caption" color="text.secondary">
-                                      {groupedData[yearData.year]?.length || 0} months recorded
-                                    </Typography>
-                                  </Box>
-                                </Box>
-                              </TableCell>
-                              <TableCell align="right">
-                                {isEditing ? (
-                                  <TextField
-                                    size="small"
-                                    type="number"
-                                    value={editForm.gross}
-                                    onChange={(e) => handleFormChange('gross', e.target.value)}
-                                    inputProps={{ min: 0, step: 0.01 }}
-                                    sx={{ width: 140 }}
-                                  />
-                                ) : (
-                                  <Typography variant="body1" sx={{ color: 'success.main', fontWeight: 700 }}>
-                                    {formatCurrency(yearData.gross)}
-                                  </Typography>
-                                )}
-                              </TableCell>
-                              <TableCell align="right">
-                                {isEditing ? (
-                                  <TextField
-                                    size="small"
-                                    type="number"
-                                    value={editForm.purchase}
-                                    onChange={(e) => handleFormChange('purchase', e.target.value)}
-                                    inputProps={{ min: 0, step: 0.01 }}
-                                    sx={{ width: 140 }}
-                                  />
-                                ) : (
-                                  <Typography variant="body1" sx={{ color: 'warning.main', fontWeight: 700 }}>
-                                    {formatCurrency(yearData.purchase)}
-                                  </Typography>
-                                )}
-                              </TableCell>
-                              <TableCell align="right">
-                                {isEditing ? (
-                                  <Typography variant="body1" sx={{ color: 'primary.main', fontWeight: 700 }}>
-                                    {formatCurrency((parseFloat(editForm.gross) || 0) - (parseFloat(editForm.purchase) || 0))}
-                                  </Typography>
-                                ) : (
-                                  <Typography variant="body1" sx={{ color: 'primary.main', fontWeight: 700 }}>
-                                    {formatCurrency(yearData.profit)}
-                                  </Typography>
-                                )}
-                              </TableCell>
-                              <TableCell align="right">
-                                <Chip 
-                                  label={isEditing 
-                                    ? `${(((parseFloat(editForm.gross) || 0) - (parseFloat(editForm.purchase) || 0)) / (parseFloat(editForm.gross) || 1) * 100).toFixed(1)}%`
-                                    : `${((yearData.profit / yearData.gross) * 100).toFixed(1)}%`
-                                  }
-                                  color={isEditing 
-                                    ? ((parseFloat(editForm.gross) || 0) - (parseFloat(editForm.purchase) || 0)) > 0 ? 'success' : 'error'
-                                    : yearData.profit > 0 ? 'success' : 'error'
-                                  }
-                                  variant="filled"
-                                  size="small"
-                                  sx={{ 
-                                    fontWeight: 700,
-                                    fontSize: '0.8rem',
-                                    px: 1.5,
-                                    boxShadow: 1,
-                                  }}
-                                />
-                              </TableCell>
-                              <TableCell align="center">
-                                {isEditing ? (
-                                  <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
-                                    <Tooltip title="Save">
-                                      <IconButton
-                                        size="small"
-                                        color="success"
-                                        onClick={() => handleSaveYearly(yearData.year)}
-                                      >
-                                        <SaveIcon fontSize="small" />
-                                      </IconButton>
-                                    </Tooltip>
-                                    <Tooltip title="Cancel">
-                                      <IconButton
-                                        size="small"
-                                        color="error"
-                                        onClick={handleCancelEdit}
-                                      >
-                                        <CancelIcon fontSize="small" />
-                                      </IconButton>
-                                    </Tooltip>
-                                  </Box>
-                                ) : (
-                                  <Tooltip title="Edit">
-                                    <IconButton
-                                      size="small"
-                                      color="primary"
-                                      onClick={() => handleEditYearly(yearData)}
-                                    >
-                                      <EditIcon fontSize="small" />
-                                    </IconButton>
-                                  </Tooltip>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          </Fade>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              ) : (
-                <Box sx={{ textAlign: 'center', py: 6 }}>
-                  <Avatar sx={{ 
-                    bgcolor: 'grey.100', 
-                    mx: 'auto', 
-                    mb: 2, 
-                    width: 56, 
-                    height: 56,
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                  }}>
-                    <DateRangeIcon sx={{ fontSize: 28, color: 'grey.400' }} />
-                  </Avatar>
-                  <Typography variant="h6" color="text.secondary" gutterBottom fontWeight={600}>
-                    No Yearly Data Available
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    Yearly summaries will appear here once you start recording sales
-                  </Typography>
-                  <Button 
-                    variant="contained" 
-                    size="small"
-                    sx={{ 
-                      borderRadius: 2,
-                      px: 3,
-                      py: 1,
-                      fontWeight: 600,
-                    }}
-                  >
-                    Get Started
-                  </Button>
-                </Box>
-              )}
-            </Box>
-          </TabPanel>
-        </Card>
-      </Grow>
-
-      {/* Compact Info Alert */}
-      <Fade in timeout={1200}>
-        <Alert 
-          severity="info" 
-          sx={{ 
-            mt: 2, 
-            borderRadius: 2,
-            p: 2,
-            boxShadow: '0 2px 15px rgba(33, 150, 243, 0.1)',
-            border: '1px solid rgba(33, 150, 243, 0.2)',
-            '& .MuiAlert-icon': {
-              fontSize: 20,
-            }
+            boxShadow: (t) => (t.palette.mode === 'dark' ? '0 10px 24px rgba(0,0,0,0.6)' : '0 10px 24px -8px rgba(16,24,22,0.25)'),
           }}
-          icon={<AssessmentIcon />}
         >
-          <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
-            How Financial Tracking Works
+          <Typography variant="caption" color="text.secondary" fontWeight={700} component="p" sx={{ mb: 0.5 }}>
+            {hovered.title}
           </Typography>
-          <Typography variant="body2">
-            Financial data is automatically recorded when you export sales from the Sales Record page. 
-            The system tracks daily totals, monthly aggregations, and calculates yearly summaries for comprehensive reporting.
-          </Typography>
-        </Alert>
-      </Fade>
+          {hovered.rows.map((row) => (
+            <Box key={row.name} sx={{ display: 'flex', alignItems: 'center', gap: 1, lineHeight: 1.6 }}>
+              {row.color ? (
+                row.line ? (
+                  <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: row.color, flexShrink: 0 }} />
+                ) : (
+                  <Box sx={{ width: 12, height: 2, borderRadius: 1, bgcolor: row.color, flexShrink: 0 }} />
+                )
+              ) : (
+                <Box sx={{ width: 12, flexShrink: 0 }} />
+              )}
+              <Typography variant="body2" fontWeight={700} sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                {row.value}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {row.name}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
     </Box>
   );
 };
 
-export default GrossSales; 
+const LegendItem: React.FC<{ color: string; label: string; dot?: boolean }> = ({ color, label, dot }) => (
+  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
+    <Box sx={{ width: dot ? 8 : 10, height: dot ? 8 : 10, borderRadius: dot ? '50%' : '2px', bgcolor: color }} />
+    <Typography variant="caption" color="text.secondary" fontWeight={600}>
+      {label}
+    </Typography>
+  </Box>
+);
+
+// ---------- tiles ----------
+
+type Delta = { text: string; direction: 'up' | 'down' | 'flat' };
+
+const StatTile: React.FC<{ icon: React.ReactElement; label: string; value: string; caption?: string; delta?: Delta | null }> = ({ icon, label, value, caption, delta }) => (
+  <Card sx={{ p: 2, display: 'flex', gap: 1.5, alignItems: 'flex-start', minWidth: 0 }}>
+    <Box
+      sx={{
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: '10px',
+        display: { xs: 'none', sm: 'grid' },
+        placeItems: 'center',
+        color: 'primary.main',
+        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+      }}
+    >
+      {icon}
+    </Box>
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="body2" color="text.secondary" fontWeight={600}>
+        {label}
+      </Typography>
+      <Typography variant="h5" component="p" sx={{ lineHeight: 1.3, fontSize: { xs: '1.125rem', sm: '1.375rem' }, overflowWrap: 'anywhere' }}>
+        {value}
+      </Typography>
+      {delta && (
+        <Typography
+          variant="caption"
+          component="p"
+          fontWeight={700}
+          color={delta.direction === 'up' ? 'success.main' : delta.direction === 'down' ? 'error.main' : 'text.secondary'}
+          sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}
+        >
+          {delta.direction === 'up' ? <UpIcon sx={{ fontSize: 14 }} /> : delta.direction === 'down' ? <DownIcon sx={{ fontSize: 14 }} /> : null}
+          {delta.text}
+        </Typography>
+      )}
+      {caption && (
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ lineHeight: 1.4 }}>
+          {caption}
+        </Typography>
+      )}
+    </Box>
+  </Card>
+);
+
+const compareDelta = (current: number, previous: number, against: string): Delta | null => {
+  if (previous <= 0 && current <= 0) return null;
+  if (previous <= 0) return { text: `New vs ${against}`, direction: 'up' };
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.5) return { text: `Flat vs ${against}`, direction: 'flat' };
+  return { text: `${change > 0 ? '+' : '−'}${pct(change)} vs ${against}`, direction: change > 0 ? 'up' : 'down' };
+};
+
+// ---------- page ----------
+
+type DeleteTarget =
+  | { kind: 'daily'; record: DailySalesRecord }
+  | { kind: 'monthly'; record: GrossSalesRecord };
+
+type Editing = { kind: 'daily' | 'monthly' | 'yearly'; key: string } | null;
+
+const GrossSales: React.FC = () => {
+  const navigate = useNavigate();
+  const notify = useNotify();
+  const colors = useChartColors();
+  const grossSalesContext = useContext(GrossSalesContext);
+  const grossSalesData = grossSalesContext.grossSalesData;
+  const dailySalesData = grossSalesContext.dailySalesData;
+
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+
+  const today = useMemo(() => new Date(), []);
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
+  const [tab, setTab] = useState<'daily' | 'monthly' | 'yearly'>('daily');
+
+  const [editing, setEditing] = useState<Editing>(null);
+  const [editGross, setEditGross] = useState('');
+  const [editPurchase, setEditPurchase] = useState('');
+
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteLinked, setDeleteLinked] = useState(true);
+
+  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth() + 1;
+  const monthDays = daysInMonth(year, month);
+  // Days of the selected month that have already happened
+  const elapsedDays = isCurrentMonth ? today.getDate() : year * 12 + month < today.getFullYear() * 12 + today.getMonth() + 1 ? monthDays : 0;
+
+  // ---------- lookups ----------
+
+  const dailyByKey = useMemo(() => {
+    const map = new Map<string, DailySalesRecord>();
+    for (const r of dailySalesData) map.set(dayKey(r.year, r.month, r.day), r);
+    return map;
+  }, [dailySalesData]);
+
+  const monthlyByKey = useMemo(() => {
+    const map = new Map<string, GrossSalesRecord>();
+    for (const r of grossSalesData) map.set(`${r.year}-${r.month}`, r);
+    return map;
+  }, [grossSalesData]);
+
+  const sumDays = useCallback(
+    (y: number, m: number, uptoDay: number) => {
+      const total = { gross: 0, purchase: 0, profit: 0, days: 0 };
+      for (let d = 1; d <= uptoDay; d += 1) {
+        const r = dailyByKey.get(dayKey(y, m, d));
+        if (r) {
+          total.gross += r.gross;
+          total.purchase += r.purchase;
+          total.profit += r.profit;
+          total.days += 1;
+        }
+      }
+      return total;
+    },
+    [dailyByKey]
+  );
+
+  // A month's figures come from its monthly record (the running total), falling back to its days
+  const monthTotals = useCallback(
+    (y: number, m: number) => {
+      const record = monthlyByKey.get(`${y}-${m}`);
+      if (record) return { gross: record.gross, purchase: record.purchase, profit: record.profit };
+      const days = sumDays(y, m, daysInMonth(y, m));
+      return { gross: days.gross, purchase: days.purchase, profit: days.profit };
+    },
+    [monthlyByKey, sumDays]
+  );
+
+  const current = monthTotals(year, month);
+  const currentDays = sumDays(year, month, monthDays);
+
+  // Compare like with like: the same number of days into last month when this month isn't over
+  const comparison = useMemo(() => {
+    const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+    const prevDaily = sumDays(prev.year, prev.month, daysInMonth(prev.year, prev.month));
+    if (isCurrentMonth && prevDaily.days > 0) {
+      const upto = Math.min(today.getDate(), daysInMonth(prev.year, prev.month));
+      const prevSame = sumDays(prev.year, prev.month, upto);
+      const nowSame = sumDays(year, month, today.getDate());
+      return { label: `${MONTHS_SHORT[prev.month - 1]} 1–${upto}`, prev: prevSame, now: nowSame };
+    }
+    return { label: MONTHS_SHORT[prev.month - 1], prev: monthTotals(prev.year, prev.month), now: monthTotals(year, month) };
+  }, [isCurrentMonth, month, monthTotals, sumDays, today, year]);
+
+  const bestDay = useMemo(() => {
+    let best: DailySalesRecord | null = null;
+    for (let d = 1; d <= monthDays; d += 1) {
+      const r = dailyByKey.get(dayKey(year, month, d));
+      if (r && (!best || r.gross > best.gross)) best = r;
+    }
+    return best;
+  }, [dailyByKey, monthDays, month, year]);
+
+  const averagePerDay = currentDays.days > 0 ? currentDays.gross / currentDays.days : 0;
+  const projection = isCurrentMonth && today.getDate() > 0 ? (sumDays(year, month, today.getDate()).gross / today.getDate()) * monthDays : null;
+
+  // Weekday pattern over the 12 weeks up to the end of the selected month (or today)
+  const weekday = useMemo(() => {
+    const end = isCurrentMonth ? today : new Date(year, month - 1, monthDays);
+    const start = new Date(end.getTime() - 83 * DAY_MS);
+    const sums = Array.from({ length: 7 }, () => ({ gross: 0, days: 0 }));
+    for (const r of dailySalesData) {
+      const date = new Date(r.year, r.month - 1, r.day);
+      if (date < start || date > end) continue;
+      const w = weekdayIndex(date);
+      sums[w].gross += r.gross;
+      sums[w].days += 1;
+    }
+    const averages = sums.map((s) => (s.days ? s.gross / s.days : 0));
+    const withData = averages.filter((a, i) => sums[i].days > 0);
+    const overall = withData.length ? withData.reduce((a, b) => a + b, 0) / withData.length : 0;
+    let best = -1;
+    averages.forEach((a, i) => {
+      if (sums[i].days > 0 && (best < 0 || a > averages[best])) best = i;
+    });
+    return { averages, sums, overall, best };
+  }, [dailySalesData, isCurrentMonth, month, monthDays, today, year]);
+
+  // ---------- chart data ----------
+
+  const dailyColumns = useMemo<ChartColumn[]>(() => {
+    return Array.from({ length: monthDays }, (_, i) => {
+      const d = i + 1;
+      const r = dailyByKey.get(dayKey(year, month, d));
+      const date = new Date(year, month - 1, d);
+      const gross = r?.gross ?? 0;
+      const purchase = r?.purchase ?? 0;
+      const profit = r?.profit ?? 0;
+      const title = date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' });
+      return {
+        key: `d${d}`,
+        tick: String(d),
+        segments: [
+          { name: 'Purchase', value: Math.min(purchase, gross), color: colors.purchase },
+          { name: 'Profit', value: Math.max(0, gross - purchase), color: colors.profit },
+        ],
+        title,
+        rows: r
+          ? [
+              { name: 'gross', value: formatPeso(gross) },
+              { name: 'purchase', value: formatPeso(purchase), color: colors.purchase },
+              { name: `profit · ${pct(margin(gross, profit))} margin`, value: formatPeso(profit), color: colors.profit },
+            ]
+          : [{ name: '', value: 'No sales recorded' }],
+        ariaLabel: r ? `${title}: gross ${formatPeso(gross)}, purchase ${formatPeso(purchase)}, profit ${formatPeso(profit)}` : `${title}: no sales recorded`,
+      };
+    });
+  }, [colors.profit, colors.purchase, dailyByKey, month, monthDays, year]);
+
+  const monthlyColumns = useMemo<ChartColumn[]>(() => {
+    return MONTHS_SHORT.map((label, i) => {
+      const m = i + 1;
+      const t = monthTotals(year, m);
+      const last = monthTotals(year - 1, m);
+      return {
+        key: `m${m}`,
+        tick: label,
+        segments: [
+          { name: 'Purchase', value: Math.min(t.purchase, t.gross), color: colors.purchase },
+          { name: 'Profit', value: Math.max(0, t.gross - t.purchase), color: colors.profit },
+        ],
+        ghost: last.gross > 0 ? last.gross : undefined,
+        title: monthName(year, m),
+        rows: [
+          { name: 'gross', value: formatPeso(t.gross) },
+          { name: 'purchase', value: formatPeso(t.purchase), color: colors.purchase },
+          { name: `profit · ${pct(margin(t.gross, t.profit))} margin`, value: formatPeso(t.profit), color: colors.profit },
+          ...(last.gross > 0 ? [{ name: `gross in ${year - 1}`, value: formatPeso(last.gross), color: colors.muted, line: true }] : []),
+        ],
+        ariaLabel: `${monthName(year, m)}: gross ${formatPeso(t.gross)}, profit ${formatPeso(t.profit)}${last.gross > 0 ? `, ${year - 1}: ${formatPeso(last.gross)}` : ''}`,
+      };
+    });
+  }, [colors.muted, colors.profit, colors.purchase, monthTotals, year]);
+
+  const weekdayColumns = useMemo<ChartColumn[]>(
+    () =>
+      WEEKDAYS.map((label, i) => ({
+        key: label,
+        tick: label,
+        segments: [{ name: 'Average', value: weekday.averages[i], color: i === weekday.best ? colors.profit : colors.deemphasis }],
+        title: WEEKDAYS_LONG[i],
+        rows: weekday.sums[i].days
+          ? [
+              { name: 'average gross', value: formatPeso(weekday.averages[i]) },
+              { name: `from ${weekday.sums[i].days} day${weekday.sums[i].days !== 1 ? 's' : ''}`, value: '' },
+            ]
+          : [{ name: '', value: 'No sales recorded' }],
+        ariaLabel: `${WEEKDAYS_LONG[i]}: average ${formatPeso(weekday.averages[i])} over ${weekday.sums[i].days} days`,
+      })),
+    [colors.deemphasis, colors.profit, weekday]
+  );
+
+  const yearTotals = useMemo(() => {
+    const years = new Map<number, { gross: number; purchase: number; profit: number; months: number }>();
+    for (const r of grossSalesData) {
+      const t = years.get(r.year) ?? { gross: 0, purchase: 0, profit: 0, months: 0 };
+      t.gross += r.gross;
+      t.purchase += r.purchase;
+      t.profit += r.profit;
+      t.months += 1;
+      years.set(r.year, t);
+    }
+    return Array.from(years, ([y, t]) => ({ year: y, ...t })).sort((a, b) => b.year - a.year);
+  }, [grossSalesData]);
+
+  // ---------- insights ----------
+
+  const insights = useMemo(() => {
+    const list: Array<{ icon: React.ReactElement; text: React.ReactNode }> = [];
+    if (projection !== null && projection > 0) {
+      list.push({
+        icon: <PaceIcon />,
+        text: (
+          <>
+            On pace for <strong>{formatPeso(projection)}</strong> this month, at {formatPeso(projection / monthDays)} a day so far.
+          </>
+        ),
+      });
+    }
+    const delta = comparison.prev.gross > 0 ? ((comparison.now.gross - comparison.prev.gross) / comparison.prev.gross) * 100 : null;
+    if (delta !== null && current.gross > 0) {
+      list.push({
+        icon: delta >= 0 ? <TrendUpIcon /> : <TrendDownIcon />,
+        text: (
+          <>
+            Gross is <strong>{delta >= 0 ? 'up' : 'down'} {pct(delta)}</strong> vs {comparison.label} ({formatPeso(comparison.prev.gross)}).
+          </>
+        ),
+      });
+    }
+    if (current.gross > 0 && comparison.prev.gross > 0) {
+      const now = margin(comparison.now.gross, comparison.now.profit);
+      const before = margin(comparison.prev.gross, comparison.prev.profit);
+      const diff = now - before;
+      list.push({
+        icon: <MarginIcon />,
+        text: (
+          <>
+            Profit margin is <strong>{pct(now)}</strong>
+            {Math.abs(diff) < 0.5 ? `, about the same as ${comparison.label}` : `, ${diff > 0 ? 'up' : 'down'} ${Math.abs(diff).toFixed(1)} points from ${comparison.label}`}.
+          </>
+        ),
+      });
+    }
+    if (weekday.best >= 0 && weekday.overall > 0) {
+      const lift = ((weekday.averages[weekday.best] - weekday.overall) / weekday.overall) * 100;
+      list.push({
+        icon: <BestIcon />,
+        text: (
+          <>
+            <strong>{WEEKDAYS_LONG[weekday.best]}</strong> are your strongest day: {formatPeso(weekday.averages[weekday.best])} on average
+            {lift >= 1 ? `, ${pct(lift)} above a typical day` : ''}.
+          </>
+        ),
+      });
+    }
+    const thisYear = MONTHS_SHORT.map((_, i) => ({ m: i + 1, ...monthTotals(year, i + 1) })).filter((x) => x.gross > 0);
+    if (thisYear.length > 1) {
+      const top = thisYear.reduce((a, b) => (b.gross > a.gross ? b : a));
+      list.push({
+        icon: <CalendarIcon />,
+        text: (
+          <>
+            Best month of {year}: <strong>{new Date(year, top.m - 1, 1).toLocaleDateString('en-PH', { month: 'long' })}</strong> at {formatPeso(top.gross)}.
+          </>
+        ),
+      });
+    }
+    // Year over year, like for like: only finished months that have sales in both years
+    const lastFullMonth = year === today.getFullYear() ? today.getMonth() : 12;
+    const shared: number[] = [];
+    let thisSum = 0;
+    let lastSum = 0;
+    for (let m = 1; m <= lastFullMonth; m += 1) {
+      const now = monthTotals(year, m).gross;
+      const before = monthTotals(year - 1, m).gross;
+      if (now > 0 && before > 0) {
+        shared.push(m);
+        thisSum += now;
+        lastSum += before;
+      }
+    }
+    if (shared.length > 0) {
+      const yoy = ((thisSum - lastSum) / lastSum) * 100;
+      const span =
+        shared.length === 1
+          ? new Date(year, shared[0] - 1, 1).toLocaleDateString('en-PH', { month: 'long' })
+          : `the ${shared.length} months with sales in both years (${MONTHS_SHORT[shared[0] - 1]}–${MONTHS_SHORT[shared[shared.length - 1] - 1]})`;
+      list.push({
+        icon: yoy >= 0 ? <TrendUpIcon /> : <TrendDownIcon />,
+        text: (
+          <>
+            Across {span}, {year} is <strong>{yoy >= 0 ? 'up' : 'down'} {pct(yoy)}</strong> on {year - 1} ({formatPeso(thisSum)} vs {formatPeso(lastSum)}).
+          </>
+        ),
+      });
+    }
+    if (elapsedDays > 0 && currentDays.days > 0) {
+      const quiet: number[] = [];
+      for (let d = 1; d <= elapsedDays; d += 1) if (!dailyByKey.has(dayKey(year, month, d))) quiet.push(d);
+      if (quiet.length > 0) {
+        list.push({
+          icon: <QuietIcon />,
+          text: (
+            <>
+              No sales recorded on <strong>{quiet.length} day{quiet.length !== 1 ? 's' : ''}</strong> this month
+              {quiet.length <= 5 ? ` (${quiet.map((d) => `${MONTHS_SHORT[month - 1]} ${d}`).join(', ')})` : ''}.
+            </>
+          ),
+        });
+      }
+    }
+    return list;
+  }, [comparison, current.gross, currentDays.days, dailyByKey, elapsedDays, month, monthDays, monthTotals, projection, today, weekday, year]);
+
+  // ---------- persistence ----------
+
+  const persistDaily = (next: DailySalesRecord[]) => {
+    grossSalesContext.setDailySalesData(next);
+    localStorage.setItem('pos_daily_sales', JSON.stringify(next));
+  };
+  const persistMonthly = (next: GrossSalesRecord[]) => {
+    grossSalesContext.setGrossSalesData(next);
+    localStorage.setItem('pos_gross_sales', JSON.stringify(next));
+  };
+  // Undo reads the stored lists, so it builds on anything recorded in the meantime
+  const storedDaily = (): DailySalesRecord[] => reviveDates(JSON.parse(localStorage.getItem('pos_daily_sales') || '[]'));
+  const storedMonthly = (): GrossSalesRecord[] => reviveDates(JSON.parse(localStorage.getItem('pos_gross_sales') || '[]'));
+
+  // ---------- editing (same rules as before: profit = gross − purchase) ----------
+
+  const startEdit = (kind: 'daily' | 'monthly' | 'yearly', key: string, gross: number, purchase: number) => {
+    setEditing({ kind, key });
+    setEditGross(String(gross));
+    setEditPurchase(String(purchase));
+  };
+  const editValues = () => {
+    const gross = parseFloat(editGross) || 0;
+    const purchase = parseFloat(editPurchase) || 0;
+    return { gross, purchase, profit: gross - purchase };
+  };
+
+  const saveDaily = (d: number) => {
+    const v = editValues();
+    const date = new Date(year, month - 1, d);
+    const existing = dailyByKey.get(dayKey(year, month, d));
+    const record: DailySalesRecord = existing
+      ? { ...existing, ...v }
+      : {
+          year,
+          month,
+          day: d,
+          dayName: date.toLocaleString('default', { weekday: 'long' }),
+          monthName: date.toLocaleString('default', { month: 'long' }),
+          date,
+          ...v,
+        };
+    persistDaily(existing ? dailySalesData.map((r) => (r === existing ? record : r)) : [...dailySalesData, record]);
+    setEditing(null);
+    notify(`Saved ${date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })}`, 'success');
+  };
+
+  const saveMonthly = (record: GrossSalesRecord) => {
+    const v = editValues();
+    persistMonthly(grossSalesData.map((r) => (r === record ? { ...r, ...v } : r)));
+    setEditing(null);
+    notify(`Saved ${monthName(record.year, record.month)}`, 'success');
+  };
+
+  // A yearly total is spread across that year's months in proportion to their gross
+  const saveYearly = (y: number) => {
+    const yearRecords = grossSalesData.filter((r) => r.year === y);
+    const oldGross = yearRecords.reduce((s, r) => s + r.gross, 0);
+    const oldPurchase = yearRecords.reduce((s, r) => s + r.purchase, 0);
+    const v = editValues();
+    const grossDiff = v.gross - oldGross;
+    const purchaseDiff = v.purchase - oldPurchase;
+    persistMonthly(
+      grossSalesData.map((r) => {
+        if (r.year !== y) return r;
+        const share = oldGross > 0 ? r.gross / oldGross : 1 / yearRecords.length;
+        const gross = r.gross + grossDiff * share;
+        const purchase = r.purchase + purchaseDiff * share;
+        return { ...r, gross, purchase, profit: gross - purchase };
+      })
+    );
+    setEditing(null);
+    notify(`Saved ${y} totals`, 'success');
+  };
+
+  // ---------- deleting (password protected, undoable) ----------
+
+  const openDelete = (target: DeleteTarget) => {
+    setDeleteTarget(target);
+    setDeletePassword('');
+    setDeleteError('');
+    setDeleteLinked(true);
+  };
+
+  const linkedInfo = useMemo(() => {
+    if (!deleteTarget) return null;
+    if (deleteTarget.kind === 'daily') {
+      const r = deleteTarget.record;
+      const monthRecord = monthlyByKey.get(`${r.year}-${r.month}`);
+      return monthRecord ? { label: `Also subtract it from ${monthName(r.year, r.month)}’s monthly total`, available: true } : { label: '', available: false };
+    }
+    const r = deleteTarget.record;
+    const days = dailySalesData.filter((d) => d.year === r.year && d.month === r.month).length;
+    return days > 0
+      ? { label: `Also delete the ${days} daily record${days !== 1 ? 's' : ''} in ${monthName(r.year, r.month)}`, available: true }
+      : { label: '', available: false };
+  }, [dailySalesData, deleteTarget, monthlyByKey]);
+
+  const confirmDelete = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deleteTarget) return;
+    if (deletePassword !== GROSS_SALES_PASSWORD) {
+      setDeleteError('Incorrect password. The record was not deleted.');
+      return;
+    }
+    const linked = deleteLinked && Boolean(linkedInfo?.available);
+
+    if (deleteTarget.kind === 'daily') {
+      const r = deleteTarget.record;
+      const label = new Date(r.year, r.month - 1, r.day).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' });
+      persistDaily(dailySalesData.filter((d) => d !== r));
+      const adjust = (sign: 1 | -1) => (m: GrossSalesRecord) =>
+        m.year === r.year && m.month === r.month
+          ? { ...m, gross: m.gross + sign * r.gross, purchase: m.purchase + sign * r.purchase, profit: m.profit + sign * r.profit }
+          : m;
+      if (linked) persistMonthly(grossSalesData.map(adjust(-1)));
+      const undo = () => {
+        persistDaily([...storedDaily(), r]);
+        if (linked) persistMonthly(storedMonthly().map(adjust(1)));
+      };
+      notify(`Deleted the record for ${label}${linked ? ' and updated the month' : ''}`, { severity: 'info', action: { label: 'Undo', onClick: undo } });
+    } else {
+      const r = deleteTarget.record;
+      const removedDays = linked ? dailySalesData.filter((d) => d.year === r.year && d.month === r.month) : [];
+      persistMonthly(grossSalesData.filter((m) => m !== r));
+      if (linked) persistDaily(dailySalesData.filter((d) => !(d.year === r.year && d.month === r.month)));
+      const undo = () => {
+        persistMonthly([...storedMonthly(), r]);
+        if (removedDays.length) persistDaily([...storedDaily(), ...removedDays]);
+      };
+      notify(`Deleted ${monthName(r.year, r.month)}${removedDays.length ? ` and its ${removedDays.length} daily records` : ''}`, {
+        severity: 'info',
+        action: { label: 'Undo', onClick: undo },
+      });
+    }
+    setDeleteTarget(null);
+  };
+
+  // ---------- export ----------
+
+  const exportCsv = () => {
+    let rows: string[] = [];
+    let name = '';
+    if (tab === 'daily') {
+      rows = ['Date,Day,Gross,Purchase,Profit,Margin %'];
+      for (let d = 1; d <= monthDays; d += 1) {
+        const r = dailyByKey.get(dayKey(year, month, d));
+        if (r) rows.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')},${r.dayName},${r.gross.toFixed(2)},${r.purchase.toFixed(2)},${r.profit.toFixed(2)},${margin(r.gross, r.profit).toFixed(1)}`);
+      }
+      name = `gross_sales_${year}-${String(month).padStart(2, '0')}_daily.csv`;
+    } else if (tab === 'monthly') {
+      rows = ['Month,Gross,Purchase,Profit,Margin %'];
+      for (let m = 1; m <= 12; m += 1) {
+        const r = monthlyByKey.get(`${year}-${m}`);
+        if (r) rows.push(`${year}-${String(m).padStart(2, '0')},${r.gross.toFixed(2)},${r.purchase.toFixed(2)},${r.profit.toFixed(2)},${margin(r.gross, r.profit).toFixed(1)}`);
+      }
+      name = `gross_sales_${year}_monthly.csv`;
+    } else {
+      rows = ['Year,Gross,Purchase,Profit,Margin %'];
+      for (const t of yearTotals) rows.push(`${t.year},${t.gross.toFixed(2)},${t.purchase.toFixed(2)},${t.profit.toFixed(2)},${margin(t.gross, t.profit).toFixed(1)}`);
+      name = 'gross_sales_yearly.csv';
+    }
+    if (rows.length === 1) {
+      notify('Nothing to export for this period', 'warning');
+      return;
+    }
+    saveAs(new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' }), name);
+    notify(`Exported ${rows.length - 1} row${rows.length - 1 !== 1 ? 's' : ''}`, 'success');
+  };
+
+  // ---------- render helpers ----------
+
+  const stepMonth = (by: number) => {
+    const d = new Date(year, month - 1 + by, 1);
+    setYear(d.getFullYear());
+    setMonth(d.getMonth() + 1);
+    setEditing(null);
+  };
+
+  const editCells = (onSave: () => void) => (
+    <>
+      <TableCell align="right">
+        <TextField
+          size="small"
+          type="number"
+          value={editGross}
+          onChange={(e) => setEditGross(e.target.value)}
+          autoFocus
+          inputProps={{ 'aria-label': 'Gross', min: 0, step: 0.01 }}
+          sx={{ width: 120 }}
+          onKeyDown={(e) => e.key === 'Enter' && onSave()}
+        />
+      </TableCell>
+      <TableCell align="right">
+        <TextField
+          size="small"
+          type="number"
+          value={editPurchase}
+          onChange={(e) => setEditPurchase(e.target.value)}
+          inputProps={{ 'aria-label': 'Purchase', min: 0, step: 0.01 }}
+          sx={{ width: 120 }}
+          onKeyDown={(e) => e.key === 'Enter' && onSave()}
+        />
+      </TableCell>
+      <TableCell align="right" sx={{ color: 'text.secondary' }}>
+        {formatPeso(editValues().profit)}
+      </TableCell>
+      <TableCell align="right" sx={{ color: 'text.secondary' }}>
+        {pct(margin(editValues().gross, editValues().profit))}
+      </TableCell>
+      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+        <Button size="small" variant="contained" onClick={onSave}>
+          Save
+        </Button>
+        <Button size="small" color="inherit" onClick={() => setEditing(null)} sx={{ ml: 0.5 }}>
+          Cancel
+        </Button>
+      </TableCell>
+    </>
+  );
+
+  const valueCells = (gross: number, purchase: number, profit: number) => (
+    <>
+      <TableCell align="right" sx={{ fontWeight: 600 }}>
+        {formatPeso(gross)}
+      </TableCell>
+      <TableCell align="right">{formatPeso(purchase)}</TableCell>
+      <TableCell align="right" sx={{ color: profit < 0 ? 'error.main' : undefined }}>
+        {formatPeso(profit)}
+      </TableCell>
+      <TableCell align="right" sx={{ color: 'text.secondary' }}>
+        {gross > 0 ? pct(margin(gross, profit)) : '—'}
+      </TableCell>
+    </>
+  );
+
+  const rowActions = (onEdit: () => void, onDelete?: () => void, label = 'record') => (
+    <TableCell align="right" sx={{ whiteSpace: 'nowrap', width: '1%' }}>
+      <Tooltip title="Edit">
+        <IconButton size="small" aria-label={`Edit ${label}`} onClick={onEdit}>
+          <EditIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      {onDelete && (
+        <Tooltip title="Delete (password required)">
+          <IconButton size="small" aria-label={`Delete ${label}`} onClick={onDelete}>
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+    </TableCell>
+  );
+
+  // ---------- password gate ----------
+
+  if (!isAuthenticated) {
+    const submit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (password === GROSS_SALES_PASSWORD) {
+        setIsAuthenticated(true);
+        setError('');
+      } else {
+        setError('Incorrect password. Please try again.');
+      }
+    };
+    return (
+      <Box sx={{ display: 'grid', placeItems: 'center', minHeight: 'calc(100vh - 140px)' }}>
+        <Card component="form" onSubmit={submit} noValidate sx={{ p: 3.5, width: '100%', maxWidth: 400 }}>
+          <Box
+            sx={{
+              width: 48,
+              height: 48,
+              borderRadius: '14px',
+              display: 'grid',
+              placeItems: 'center',
+              color: 'primary.main',
+              bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === 'dark' ? 0.16 : 0.1),
+              mb: 2,
+            }}
+          >
+            <LockIcon />
+          </Box>
+          <Typography variant="h5">Gross Sales is locked</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+            Enter the owner password to see sales, purchases and profit.
+          </Typography>
+          <TextField
+            fullWidth
+            autoFocus
+            label="Password"
+            type={showPassword ? 'text' : 'password'}
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setError('');
+            }}
+            error={Boolean(error)}
+            helperText={error || ' '}
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <IconButton aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((v) => !v)} edge="end">
+                    {showPassword ? <VisibilityOffIcon /> : <VisibilityIcon />}
+                  </IconButton>
+                </InputAdornment>
+              ),
+            }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+            <Button color="inherit" onClick={() => navigate('/')} sx={{ flex: 1 }}>
+              Back to Basket
+            </Button>
+            <Button type="submit" variant="contained" sx={{ flex: 1 }}>
+              Unlock
+            </Button>
+          </Box>
+        </Card>
+      </Box>
+    );
+  }
+
+  // ---------- page ----------
+
+  const deltaGross = compareDelta(comparison.now.gross, comparison.prev.gross, comparison.label);
+  const deltaProfit = compareDelta(comparison.now.profit, comparison.prev.profit, comparison.label);
+  const avgLabel = averagePerDay > 0 ? `Avg ${formatCompact(averagePerDay)}/day` : '';
+  const hasAnyData = grossSalesData.length > 0 || dailySalesData.length > 0;
+
+  return (
+    <Box>
+      {/* Header + period: everything below follows the selected month */}
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 1.5, mb: 2 }}>
+        <Box>
+          <Typography variant="h5">Gross Sales</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Sales, purchases and profit over time.
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <IconButton aria-label="Previous month" onClick={() => stepMonth(-1)}>
+            <PrevIcon />
+          </IconButton>
+          <Typography fontWeight={700} sx={{ minWidth: 150, textAlign: 'center' }}>
+            {monthName(year, month)}
+          </Typography>
+          <IconButton aria-label="Next month" onClick={() => stepMonth(1)} disabled={isCurrentMonth}>
+            <NextIcon />
+          </IconButton>
+          {!isCurrentMonth && (
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                setYear(today.getFullYear());
+                setMonth(today.getMonth() + 1);
+              }}
+              sx={{ ml: 0.5 }}
+            >
+              This month
+            </Button>
+          )}
+        </Box>
+      </Box>
+
+      {/* KPIs */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 1.5, mb: 2 }}>
+        <StatTile icon={<GrossIcon />} label="Gross sales" value={formatPeso(current.gross)} delta={deltaGross} caption={isCurrentMonth ? 'Month to date' : monthName(year, month)} />
+        <StatTile
+          icon={<MarginIcon />}
+          label="Profit"
+          value={formatPeso(current.profit)}
+          delta={deltaProfit}
+          caption={current.gross > 0 ? `${pct(margin(current.gross, current.profit))} margin` : undefined}
+        />
+        <StatTile
+          icon={<PaceIcon />}
+          label="Daily average"
+          value={formatPeso(averagePerDay)}
+          caption={
+            projection !== null && projection > 0
+              ? `On pace for ${formatCompact(projection)} this month`
+              : `${currentDays.days} of ${monthDays} days with sales`
+          }
+        />
+        <StatTile
+          icon={<BestIcon />}
+          label="Best day"
+          value={bestDay ? formatPeso(bestDay.gross) : '—'}
+          caption={bestDay ? new Date(bestDay.year, bestDay.month - 1, bestDay.day).toLocaleDateString('en-PH', { weekday: 'long', month: 'short', day: 'numeric' }) : 'No daily records yet'}
+        />
+      </Box>
+
+      {/* Daily chart + weekday pattern */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 2fr) minmax(0, 1fr)' }, gap: 2, mb: 2 }}>
+        <Card sx={{ p: 2, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1, mb: 1 }}>
+            <Box>
+              <Typography variant="h6">Daily sales</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Each column is a day’s gross, split into purchase and profit
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5 }}>
+              <LegendItem color={colors.profit} label="Profit" />
+              <LegendItem color={colors.purchase} label="Purchase" />
+            </Box>
+          </Box>
+          <ColumnChart
+            columns={dailyColumns}
+            average={averagePerDay > 0 ? { value: averagePerDay, label: avgLabel } : undefined}
+            label={`Daily gross sales for ${monthName(year, month)}`}
+          />
+        </Card>
+        <Card sx={{ p: 2, minWidth: 0 }}>
+          <Typography variant="h6">Average by weekday</Typography>
+          <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+            Gross on days with sales, last 12 weeks
+            {weekday.best >= 0 ? ` · best: ${WEEKDAYS_LONG[weekday.best]}` : ''}
+          </Typography>
+          <ColumnChart columns={weekdayColumns} label="Average gross by weekday over the last 12 weeks" />
+        </Card>
+      </Box>
+
+      {/* Monthly chart + insights */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 2fr) minmax(0, 1fr)' }, gap: 2, mb: 2 }}>
+        <Card sx={{ p: 2, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 1, mb: 1 }}>
+            <Box>
+              <Typography variant="h6">Monthly sales · {year}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Gross per month, with {year - 1} for comparison
+              </Typography>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1.5 }}>
+              <LegendItem color={colors.profit} label="Profit" />
+              <LegendItem color={colors.purchase} label="Purchase" />
+              <LegendItem color={colors.muted} label={`${year - 1} gross`} dot />
+            </Box>
+          </Box>
+          <ColumnChart columns={monthlyColumns} label={`Monthly gross sales for ${year}`} />
+        </Card>
+        <Card sx={{ p: 2, minWidth: 0 }}>
+          <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+            <InsightsIcon color="primary" /> Insights
+          </Typography>
+          {insights.length === 0 ? (
+            <Typography variant="body2" color="text.secondary">
+              {hasAnyData ? 'Not enough data for this month yet. Insights appear as sales are recorded.' : 'Insights appear once sales are recorded.'}
+            </Typography>
+          ) : (
+            <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0, display: 'grid', gap: 1.5 }}>
+              {insights.map((insight, i) => (
+                <Box component="li" key={i} sx={{ display: 'flex', gap: 1.25, alignItems: 'flex-start' }}>
+                  <Box sx={{ color: 'text.secondary', mt: '1px', '& svg': { fontSize: 20 } }}>{insight.icon}</Box>
+                  <Typography variant="body2" sx={{ lineHeight: 1.5 }}>
+                    {insight.text}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
+        </Card>
+      </Box>
+
+      {/* Records: the table view of everything above */}
+      <Card sx={{ minWidth: 0 }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 1, px: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Tabs
+            value={tab}
+            onChange={(_, value) => {
+              setTab(value);
+              setEditing(null);
+            }}
+          >
+            <Tab value="daily" label={`Daily · ${MONTHS_SHORT[month - 1]} ${year}`} />
+            <Tab value="monthly" label={`Monthly · ${year}`} />
+            <Tab value="yearly" label="Yearly" />
+          </Tabs>
+          <Button size="small" startIcon={<ExportIcon />} onClick={exportCsv}>
+            Export CSV
+          </Button>
+        </Box>
+        <TableContainer>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>{tab === 'daily' ? 'Date' : tab === 'monthly' ? 'Month' : 'Year'}</TableCell>
+                <TableCell align="right">Gross</TableCell>
+                <TableCell align="right">Purchase</TableCell>
+                <TableCell align="right">Profit</TableCell>
+                <TableCell align="right">Margin</TableCell>
+                <TableCell align="right" sx={{ position: 'relative' }}>
+                  <Box component="span" sx={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap' }}>
+                    Actions
+                  </Box>
+                </TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {tab === 'daily' &&
+                Array.from({ length: monthDays }, (_, i) => {
+                  const d = i + 1;
+                  const r = dailyByKey.get(dayKey(year, month, d));
+                  const date = new Date(year, month - 1, d);
+                  const key = `d-${d}`;
+                  const isEditing = editing?.kind === 'daily' && editing.key === key;
+                  const future = isCurrentMonth && d > today.getDate();
+                  return (
+                    <TableRow key={key} hover sx={{ opacity: !r && !isEditing ? 0.55 : 1 }}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {date.toLocaleDateString('en-PH', { weekday: 'short', month: 'short', day: 'numeric' })}
+                        {isCurrentMonth && d === today.getDate() && (
+                          <Box component="span" sx={{ ml: 1, fontSize: '0.75rem', fontWeight: 700, color: 'primary.main' }}>
+                            Today
+                          </Box>
+                        )}
+                      </TableCell>
+                      {isEditing ? (
+                        editCells(() => saveDaily(d))
+                      ) : r ? (
+                        <>
+                          {valueCells(r.gross, r.purchase, r.profit)}
+                          {rowActions(
+                            () => startEdit('daily', key, r.gross, r.purchase),
+                            () => openDelete({ kind: 'daily', record: r }),
+                            date.toLocaleDateString('en-PH', { month: 'long', day: 'numeric' })
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <TableCell align="right" colSpan={4} sx={{ color: 'text.secondary' }}>
+                            {future ? '' : 'No sales recorded'}
+                          </TableCell>
+                          <TableCell align="right">
+                            {!future && (
+                              <Button size="small" onClick={() => startEdit('daily', key, 0, 0)}>
+                                Add
+                              </Button>
+                            )}
+                          </TableCell>
+                        </>
+                      )}
+                    </TableRow>
+                  );
+                })}
+
+              {tab === 'monthly' &&
+                (() => {
+                  const rows = Array.from({ length: 12 }, (_, i) => i + 1).filter((m) => monthlyByKey.has(`${year}-${m}`));
+                  if (rows.length === 0)
+                    return (
+                      <TableRow>
+                        <TableCell colSpan={6} sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                          No monthly records for {year}.
+                        </TableCell>
+                      </TableRow>
+                    );
+                  return rows.map((m) => {
+                    const r = monthlyByKey.get(`${year}-${m}`)!;
+                    const key = `m-${m}`;
+                    const isEditing = editing?.kind === 'monthly' && editing.key === key;
+                    return (
+                      <TableRow key={key} hover selected={m === month}>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>{monthName(year, m)}</TableCell>
+                        {isEditing ? (
+                          editCells(() => saveMonthly(r))
+                        ) : (
+                          <>
+                            {valueCells(r.gross, r.purchase, r.profit)}
+                            {rowActions(
+                              () => startEdit('monthly', key, r.gross, r.purchase),
+                              () => openDelete({ kind: 'monthly', record: r }),
+                              monthName(year, m)
+                            )}
+                          </>
+                        )}
+                      </TableRow>
+                    );
+                  });
+                })()}
+
+              {tab === 'yearly' &&
+                (yearTotals.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} sx={{ textAlign: 'center', py: 4, color: 'text.secondary' }}>
+                      No records yet.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  yearTotals.map((t) => {
+                    const key = `y-${t.year}`;
+                    const isEditing = editing?.kind === 'yearly' && editing.key === key;
+                    return (
+                      <TableRow key={key} hover selected={t.year === year}>
+                        <TableCell>
+                          {t.year}
+                          <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                            {t.months} month{t.months !== 1 ? 's' : ''}
+                          </Typography>
+                        </TableCell>
+                        {isEditing ? (
+                          editCells(() => saveYearly(t.year))
+                        ) : (
+                          <>
+                            {valueCells(t.gross, t.purchase, t.profit)}
+                            {rowActions(() => startEdit('yearly', key, t.gross, t.purchase), undefined, `${t.year} totals`)}
+                          </>
+                        )}
+                      </TableRow>
+                    );
+                  })
+                ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ px: 2, py: 1.5, borderTop: 1, borderColor: 'divider' }}>
+          {tab === 'yearly'
+            ? 'Year totals are the sum of their months. Editing one spreads the change across those months; delete individual months from the Monthly tab.'
+            : 'Totals are added automatically at every Basket checkout and when a report is exported from Sales Record. Deleting a record needs the owner password.'}
+        </Typography>
+      </Card>
+
+      {/* Password-protected delete */}
+      <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <Box component="form" onSubmit={confirmDelete} noValidate>
+          <DialogTitle>
+            Delete{' '}
+            {deleteTarget?.kind === 'daily'
+              ? new Date(deleteTarget.record.year, deleteTarget.record.month - 1, deleteTarget.record.day).toLocaleDateString('en-PH', {
+                  weekday: 'short',
+                  month: 'long',
+                  day: 'numeric',
+                  year: 'numeric',
+                })
+              : deleteTarget
+                ? monthName(deleteTarget.record.year, deleteTarget.record.month)
+                : ''}
+            ?
+          </DialogTitle>
+          <DialogContent>
+            {deleteTarget && (
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', rowGap: 0.5, mb: 2, p: 1.5, borderRadius: '10px', bgcolor: 'background.default' }}>
+                <Typography variant="body2">Gross</Typography>
+                <Typography variant="body2" fontWeight={700} sx={{ textAlign: 'right' }}>
+                  {formatPeso(deleteTarget.record.gross)}
+                </Typography>
+                <Typography variant="body2">Purchase</Typography>
+                <Typography variant="body2" fontWeight={700} sx={{ textAlign: 'right' }}>
+                  {formatPeso(deleteTarget.record.purchase)}
+                </Typography>
+                <Typography variant="body2">Profit</Typography>
+                <Typography variant="body2" fontWeight={700} sx={{ textAlign: 'right' }}>
+                  {formatPeso(deleteTarget.record.profit)}
+                </Typography>
+              </Box>
+            )}
+            {linkedInfo?.available && (
+              <FormControlLabel
+                control={<Checkbox checked={deleteLinked} onChange={(e) => setDeleteLinked(e.target.checked)} />}
+                label={<Typography variant="body2">{linkedInfo.label}</Typography>}
+                sx={{ mb: 1.5 }}
+              />
+            )}
+            <TextField
+              fullWidth
+              autoFocus
+              type="password"
+              label="Owner password"
+              value={deletePassword}
+              onChange={(e) => {
+                setDeletePassword(e.target.value);
+                setDeleteError('');
+              }}
+              error={Boolean(deleteError)}
+              helperText={deleteError || 'Required to delete records'}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <LockIcon fontSize="small" color="action" />
+                  </InputAdornment>
+                ),
+              }}
+            />
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2.5 }}>
+            <Button color="inherit" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="contained" color="error" disabled={!deletePassword}>
+              Delete
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
+    </Box>
+  );
+};
+
+export default GrossSales;
